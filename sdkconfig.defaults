@@ -1,0 +1,16 @@
+# Rust often needs a bit of extra main task stack size compared to C (the default is 3K)
+CONFIG_MAIN_TASK_STACK_SIZE=8000
+
+# Use this to set FreeRTOS kernel tick frequency to 1000 Hz (100 Hz by default).
+# This allows to use 1 ms granularity for thread sleeps (10 ms granularity by default).
+CONFIG_FREERTOS_HZ=1000
+
+# 4MB flash (standard for most ESP32-C3 modules)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Use ESP-IDF's built-in two-OTA-slot partition table
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# Enable HTTPS for OTA downloads
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

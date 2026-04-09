@@ -1,0 +1,30 @@
+[package]
+name = "led-kurokku-esp"
+version = "0.1.0"
+authors = ["swilcox"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+esp-idf-svc = { version = "0.50", default-features = false, features = ["alloc"] }
+anyhow = "1"
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+time = { version = "0.3", default-features = false, features = ["formatting"] }
+
+[build-dependencies]
+embuild = "0.33"
+
+[features]
+default = ["max7219"]
+max7219 = []
+tm1637 = []
