@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::display::AnyDisplay;
 
+pub mod animation;
 pub mod clock;
 pub mod message;
 pub mod raw_render;

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+pub use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use log;
 use std::time::Duration;
@@ -54,15 +55,16 @@ pub fn get_ip(wifi: &BlockingWifi<EspWifi<'static>>) -> Option<String> {
         .map(|info| format!("{}", info.ip))
 }
 
-/// Sync system time from NTP. Blocks until time is set or timeout.
-pub fn sync_ntp() -> Result<()> {
+/// Sync system time from NTP. Blocks until the first sync completes or timeout.
+/// Returns the SNTP handle — caller must keep it alive so periodic re-syncs
+/// continue (default: every hour via ESP-IDF's CONFIG_LWIP_SNTP_UPDATE_DELAY).
+pub fn sync_ntp() -> Result<EspSntp<'static>> {
     use esp_idf_svc::sntp::EspSntp;
 
     log::info!("Starting NTP sync...");
     let sntp = EspSntp::new_default()
         .map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
 
-    // Wait up to 15 seconds for time sync
     let start = std::time::Instant::now();
     while sntp.get_sync_status() != esp_idf_svc::sntp::SyncStatus::Completed {
         if start.elapsed() > Duration::from_secs(15) {
@@ -70,6 +72,20 @@ pub fn sync_ntp() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    log::info!("NTP time synced");
+    log::info!("NTP time synced (periodic re-sync active)");
+    Ok(sntp)
+}
+
+/// Apply a POSIX TZ string to the C runtime so `localtime_r` honors it.
+/// Call this after NTP sync.
+pub fn set_timezone(tz: &str) -> Result<()> {
+    use std::ffi::CString;
+    let key = CString::new("TZ").unwrap();
+    let val = CString::new(tz).map_err(|_| anyhow::anyhow!("invalid TZ string"))?;
+    unsafe {
+        esp_idf_svc::sys::setenv(key.as_ptr(), val.as_ptr(), 1);
+        esp_idf_svc::sys::tzset();
+    }
+    log::info!("Timezone set: {}", tz);
     Ok(())
 }

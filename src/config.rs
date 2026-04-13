@@ -14,6 +14,8 @@ pub struct AppConfig {
     pub format_24h: bool,
     pub default_brightness: u8,
     pub poll_interval_ms: u64,
+    /// POSIX TZ string, e.g. "CST6CDT,M3.2.0,M11.1.0" for US Central.
+    pub tz: String,
 }
 
 impl AppConfig {
@@ -35,6 +37,9 @@ impl AppConfig {
         let default_brightness = nvs_get_u8(nvs, "brightness").unwrap_or(4);
         let poll_interval_ms = nvs_get_u32(nvs, "poll_ms").map(|v| v as u64).unwrap_or(5000);
 
+        let tz = nvs_get_str(nvs, "tz")
+            .unwrap_or_else(|| compile_default("KUROKKU_TZ", "CST6CDT,M3.2.0,M11.1.0"));
+
         let cfg = Self {
             wifi_ssid,
             wifi_password,
@@ -43,15 +48,17 @@ impl AppConfig {
             format_24h,
             default_brightness,
             poll_interval_ms,
+            tz,
         };
 
         log::info!(
-            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms",
+            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}",
             cfg.server_url,
             cfg.device_id,
             cfg.format_24h,
             cfg.default_brightness,
             cfg.poll_interval_ms,
+            cfg.tz,
         );
 
         cfg
@@ -66,6 +73,7 @@ impl AppConfig {
         nvs_set_u8(nvs, "format_24h", if self.format_24h { 1 } else { 0 })?;
         nvs_set_u8(nvs, "brightness", self.default_brightness)?;
         nvs_set_u32(nvs, "poll_ms", self.poll_interval_ms as u32)?;
+        nvs_set_str(nvs, "tz", &self.tz)?;
         log::info!("Config saved to NVS");
         Ok(())
     }
@@ -138,6 +146,7 @@ fn option_env_dynamic(key: &str) -> Option<String> {
         "KUROKKU_WIFI_PASSWORD" => option_env!("KUROKKU_WIFI_PASSWORD").map(|s| s.to_string()),
         "KUROKKU_SERVER_URL" => option_env!("KUROKKU_SERVER_URL").map(|s| s.to_string()),
         "KUROKKU_DEVICE_ID" => option_env!("KUROKKU_DEVICE_ID").map(|s| s.to_string()),
+        "KUROKKU_TZ" => option_env!("KUROKKU_TZ").map(|s| s.to_string()),
         _ => None,
     }
 }

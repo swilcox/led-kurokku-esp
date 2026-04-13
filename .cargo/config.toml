@@ -10,4 +10,4 @@ build-std = ["std", "panic_abort"]
 
 [env]
 MCU = "esp32c3"
-# Note: ESP_IDF_VERSION and other ESP-IDF settings are in sdkconfig.defaults
+ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }

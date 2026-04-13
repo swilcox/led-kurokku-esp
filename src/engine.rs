@@ -18,6 +18,11 @@ struct SharedState {
     pending_brightness: Option<u8>,
     /// Set to true when the network thread detects an OTA request.
     ota_url: Option<String>,
+    /// Cancel token for the currently running widget. The network thread
+    /// signals this when it installs a new instruction so the widget wakes
+    /// up and the display loop can pick the instruction up. The display
+    /// thread replaces it with a fresh token each time it starts a widget.
+    current_cancel: CancelToken,
 }
 
 /// Engine manages the two-thread display loop.
@@ -39,6 +44,7 @@ impl Engine {
             pending_instruction: None,
             pending_brightness: None,
             ota_url: None,
+            current_cancel: CancelToken::new(),
         }));
 
         // Network thread: polls/receives instructions, updates shared state
@@ -57,7 +63,7 @@ impl Engine {
 
     fn display_loop(&self, display: &mut AnyDisplay, shared: &Arc<Mutex<SharedState>>) -> ! {
         let mut current_widget: Box<dyn Widget> = Box::new(Clock::new(self.config.format_24h));
-        let mut cancel = CancelToken::new();
+        let mut cancel = shared.lock().unwrap().current_cancel.clone();
 
         loop {
             // Check for pending instructions
@@ -77,8 +83,6 @@ impl Engine {
                     drop(state);
 
                     // Show OTA status on display
-                    cancel.cancel();
-                    cancel = CancelToken::new();
                     let mut ota_status = Status::new("OTA...", Duration::from_secs(60));
                     let _ = ota_status.run(display, &CancelToken::with_timeout(Duration::from_secs(2)));
 
@@ -94,13 +98,14 @@ impl Engine {
 
                     // Revert to clock after failed OTA
                     current_widget = Box::new(Clock::new(self.config.format_24h));
-                    cancel = CancelToken::new();
+                    let new_cancel = CancelToken::new();
+                    shared.lock().unwrap().current_cancel = new_cancel.clone();
+                    cancel = new_cancel;
                     continue;
                 }
 
                 if let Some(instruction) = state.pending_instruction.take() {
                     log::info!("New instruction: {:?}", instruction);
-                    cancel.cancel(); // stop current widget
 
                     current_widget = match instruction {
                         WidgetInstruction::Clock { format_24h } => {
@@ -119,6 +124,20 @@ impl Engine {
                         WidgetInstruction::RawSegment { segments, colon } => {
                             Box::new(crate::widget::raw_render::RawSegment::new(segments, colon))
                         }
+                        WidgetInstruction::Animation { animation, duration_secs } => {
+                            use crate::widget::animation::{Animation, AnimationType};
+                            let anim_type = match animation.as_str() {
+                                "pong" => AnimationType::Pong,
+                                "matrix" | "matrix_rain" => AnimationType::MatrixRain,
+                                _ => AnimationType::Static,
+                            };
+                            let dur = if duration_secs == 0 {
+                                Duration::ZERO
+                            } else {
+                                Duration::from_secs(duration_secs)
+                            };
+                            Box::new(Animation::new(anim_type, dur))
+                        }
                         WidgetInstruction::Ota { url } => {
                             // Put it back for OTA handling above on next loop
                             state.ota_url = Some(url);
@@ -126,7 +145,11 @@ impl Engine {
                         }
                     };
 
-                    cancel = CancelToken::new();
+                    // Install a fresh cancel token so the next server update
+                    // targets THIS widget, not the stale one.
+                    let new_cancel = CancelToken::new();
+                    state.current_cancel = new_cancel.clone();
+                    cancel = new_cancel;
                 }
             }
 
@@ -136,7 +159,9 @@ impl Engine {
                     // Widget finished (e.g. message done scrolling) — revert to clock
                     log::info!("Widget finished, reverting to clock");
                     current_widget = Box::new(Clock::new(self.config.format_24h));
-                    cancel = CancelToken::new();
+                    let new_cancel = CancelToken::new();
+                    shared.lock().unwrap().current_cancel = new_cancel.clone();
+                    cancel = new_cancel;
                 }
                 Err(e) => {
                     let msg = format!("{}", e);
@@ -146,32 +171,60 @@ impl Engine {
                     }
                     log::error!("Widget error: {}", e);
                     current_widget = Box::new(Clock::new(self.config.format_24h));
-                    cancel = CancelToken::new();
+                    let new_cancel = CancelToken::new();
+                    shared.lock().unwrap().current_cancel = new_cancel.clone();
+                    cancel = new_cancel;
                 }
             }
         }
     }
 }
 
+const MAX_CONSECUTIVE_FAILURES: u32 = 60;
+
 /// Network thread loop. Polls the instruction source and updates shared state.
 fn network_loop(source: &mut dyn InstructionSource, shared: &Arc<Mutex<SharedState>>) {
+    // Track the last instruction we pushed so repeated identical polls don't
+    // restart the active widget every interval. The server is expected to
+    // return the *current* desired state on each poll, not a diff.
+    let mut last_served: Option<WidgetInstruction> = None;
+    let mut consecutive_failures: u32 = 0;
+
     loop {
         match source.next_instruction() {
             Ok(Some(resp)) => {
+                consecutive_failures = 0;
                 let mut state = shared.lock().unwrap();
+
                 if let Some(instruction) = resp.instruction {
-                    state.pending_instruction = Some(instruction);
+                    let changed = last_served.as_ref() != Some(&instruction);
+                    if changed {
+                        log::info!("Instruction changed: {:?}", instruction);
+                        state.pending_instruction = Some(instruction.clone());
+                        // Wake the active widget so the display loop can
+                        // pick up the new instruction.
+                        state.current_cancel.cancel();
+                        last_served = Some(instruction);
+                    }
                 }
+
                 if let Some(brightness) = resp.brightness {
                     state.pending_brightness = Some(brightness);
                 }
             }
             Ok(None) => {
-                // No new instruction — server is reachable but nothing changed
+                consecutive_failures = 0;
             }
             Err(e) => {
-                log::warn!("Instruction fetch failed: {}", e);
-                // Don't update state — keep running current widget (graceful degradation)
+                consecutive_failures += 1;
+                log::warn!(
+                    "Instruction fetch failed ({}/{}): {}",
+                    consecutive_failures, MAX_CONSECUTIVE_FAILURES, e
+                );
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    log::error!("Too many consecutive failures, rebooting...");
+                    unsafe { esp_idf_svc::sys::esp_restart(); }
+                }
             }
         }
 

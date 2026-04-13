@@ -83,9 +83,18 @@ fn main() {
                         let _ = status.run(&mut any_disp, &cancel);
                     }
 
-                    // Sync NTP for accurate clock
-                    if let Err(e) = wifi::sync_ntp() {
-                        log::warn!("NTP sync failed: {}", e);
+                    // Sync NTP — keep handle alive for periodic re-sync
+                    let _sntp = match wifi::sync_ntp() {
+                        Ok(sntp) => Some(sntp),
+                        Err(e) => {
+                            log::warn!("NTP sync failed: {}", e);
+                            None
+                        }
+                    };
+
+                    // Apply timezone after time sync
+                    if let Err(e) = wifi::set_timezone(&cfg.tz) {
+                        log::warn!("Timezone set failed: {}", e);
                     }
 
                     // Log OTA partition info

@@ -51,7 +51,7 @@ impl Widget for Status {
             let total_scroll = text_width + 32; // scroll fully off-screen
             let start = std::time::Instant::now();
 
-            for offset in 0..total_scroll {
+            for offset in 0..=total_scroll {
                 if cancel.is_cancelled() || start.elapsed() >= self.duration {
                     return Ok(());
                 }

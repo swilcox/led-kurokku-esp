@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 /// Instruction from the server describing what to display.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum WidgetInstruction {
     #[serde(rename = "clock")]
@@ -36,6 +36,13 @@ pub enum WidgetInstruction {
         colon: bool,
     },
 
+    #[serde(rename = "animation")]
+    Animation {
+        animation: String,
+        #[serde(default = "default_animation_duration")]
+        duration_secs: u64,
+    },
+
     #[serde(rename = "ota")]
     Ota { url: String },
 }
@@ -43,6 +50,7 @@ pub enum WidgetInstruction {
 fn default_true() -> bool { true }
 fn default_scroll_speed() -> u64 { 50 }
 fn default_repeats() -> i32 { 1 }
+fn default_animation_duration() -> u64 { 30 }
 
 /// Full server response.
 #[derive(Deserialize, Debug, Clone)]

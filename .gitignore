@@ -2,3 +2,5 @@
 /.embuild
 /sdkconfig
 /sdkconfig.old
+.env
+.claude/
