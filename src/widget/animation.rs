@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::time::Duration;
 
-use crate::display::AnyDisplay;
+use crate::display::{AnyDisplay, PixelDisplay, SegmentDisplay};
 use crate::framebuf::{self, Frame};
 use super::{Widget, CancelToken, sleep_or_cancel};
 
@@ -32,20 +32,28 @@ impl Widget for Animation {
     }
 
     fn run(&mut self, display: &mut AnyDisplay, cancel: &CancelToken) -> Result<()> {
-        let disp = match display {
-            AnyDisplay::Pixel(ref mut d) => d.as_mut(),
-            AnyDisplay::Segment(_) => {
-                anyhow::bail!("animation widget does not support segment displays");
-            }
-        };
-
         let start = std::time::Instant::now();
         let mut rng = SimpleRng::new();
 
-        match self.animation {
-            AnimationType::Static => run_static(disp, cancel, &mut rng, self.duration, start),
-            AnimationType::Pong => run_pong(disp, cancel, self.duration, start),
-            AnimationType::MatrixRain => run_matrix_rain(disp, cancel, &mut rng, self.duration, start),
+        match display {
+            AnyDisplay::Pixel(ref mut d) => {
+                let disp = d.as_mut();
+                match self.animation {
+                    AnimationType::Static => run_static(disp, cancel, &mut rng, self.duration, start),
+                    AnimationType::Pong => run_pong(disp, cancel, self.duration, start),
+                    AnimationType::MatrixRain => run_matrix_rain(disp, cancel, &mut rng, self.duration, start),
+                }
+            }
+            AnyDisplay::Segment(ref mut d) => {
+                let disp = d.as_mut();
+                match self.animation {
+                    AnimationType::Static => run_segment_static(disp, cancel, &mut rng, self.duration, start),
+                    AnimationType::MatrixRain => run_segment_rain(disp, cancel, &mut rng, self.duration, start),
+                    // Pong has no meaningful 7-seg analog. Return Ok so the
+                    // engine reverts to clock rather than error-looping.
+                    AnimationType::Pong => Ok(()),
+                }
+            }
         }
     }
 }
@@ -86,7 +94,7 @@ fn check_timeout(
 }
 
 fn run_static(
-    disp: &mut dyn crate::display::PixelDisplay,
+    disp: &mut dyn PixelDisplay,
     cancel: &CancelToken,
     rng: &mut SimpleRng,
     duration: Duration,
@@ -109,7 +117,7 @@ fn run_static(
 }
 
 fn run_pong(
-    disp: &mut dyn crate::display::PixelDisplay,
+    disp: &mut dyn PixelDisplay,
     cancel: &CancelToken,
     duration: Duration,
     start: std::time::Instant,
@@ -197,8 +205,79 @@ fn run_pong(
     }
 }
 
+fn run_segment_static(
+    disp: &mut dyn SegmentDisplay,
+    cancel: &CancelToken,
+    rng: &mut SimpleRng,
+    duration: Duration,
+    start: std::time::Instant,
+) -> Result<()> {
+    let frame_interval = Duration::from_millis(80);
+    let n = disp.display_length();
+
+    loop {
+        if check_timeout(cancel, duration, start)? {
+            return Ok(());
+        }
+        let mut segs = vec![0u16; n];
+        for s in segs.iter_mut() {
+            // 7 segments only (bit 7 is DP/colon managed by driver)
+            *s = (rng.next() as u16) & 0x7F;
+        }
+        let colon = rng.next_range(2) == 0;
+        disp.write_segments(&segs, colon);
+        sleep_or_cancel(cancel, frame_interval)?;
+    }
+}
+
+fn run_segment_rain(
+    disp: &mut dyn SegmentDisplay,
+    cancel: &CancelToken,
+    rng: &mut SimpleRng,
+    duration: Duration,
+    start: std::time::Instant,
+) -> Result<()> {
+    // 7-seg rain stages: top (a) → upper sides (f,b) → middle (g) →
+    // lower sides (e,c) → bottom (d) → off. Matches the Go segment Rain.
+    const STAGES: [u16; 6] = [0x01, 0x22, 0x40, 0x14, 0x08, 0x00];
+
+    let frame_interval = Duration::from_millis(120);
+    let n = disp.display_length();
+    let mut drops: Vec<i16> = vec![-1; n];
+
+    loop {
+        if check_timeout(cancel, duration, start)? {
+            return Ok(());
+        }
+
+        // Randomly spawn new drops on idle digits
+        for d in drops.iter_mut() {
+            if *d < 0 && rng.next_range(6) == 0 {
+                *d = 0;
+            }
+        }
+
+        let mut segs = vec![0u16; n];
+        for (i, d) in drops.iter_mut().enumerate() {
+            if *d < 0 {
+                continue;
+            }
+            if (*d as usize) < STAGES.len() {
+                segs[i] = STAGES[*d as usize];
+            }
+            *d += 1;
+            if *d >= (STAGES.len() + 2) as i16 {
+                *d = -1;
+            }
+        }
+
+        disp.write_segments(&segs, false);
+        sleep_or_cancel(cancel, frame_interval)?;
+    }
+}
+
 fn run_matrix_rain(
-    disp: &mut dyn crate::display::PixelDisplay,
+    disp: &mut dyn PixelDisplay,
     cancel: &CancelToken,
     rng: &mut SimpleRng,
     duration: Duration,

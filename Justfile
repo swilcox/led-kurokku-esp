@@ -25,3 +25,8 @@ flash-debug:
 
 # Build release and flash in one step
 deploy: build-release flash
+
+# Run unit tests on the host (pure modules only: font, font_7seg, framebuf,
+# tm1637_proto). Overrides the default ESP target from .cargo/config.toml.
+test:
+    cargo test --target {{ `rustc -vV | awk '/^host/ {print $2}'` }} --no-default-features

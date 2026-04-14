@@ -30,8 +30,15 @@ pub enum AnyDisplay {
     Segment(Box<dyn SegmentDisplay>),
 }
 
-#[cfg(feature = "max7219")]
+// Hardware drivers pull in esp-idf-svc, so gate them on the ESP target too
+// — otherwise host `cargo test` tries to compile them under the default
+// `max7219` feature and fails.
+#[cfg(all(target_os = "espidf", feature = "max7219"))]
 pub mod max7219;
 
-#[cfg(feature = "tm1637")]
+#[cfg(all(target_os = "espidf", feature = "tm1637"))]
 pub mod tm1637;
+
+// Pure byte-encoding helpers for the TM1637 protocol. No ESP deps, so kept
+// feature-independent to stay unit-testable on any target.
+pub mod tm1637_proto;

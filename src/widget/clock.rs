@@ -2,7 +2,8 @@ use anyhow::Result;
 use std::mem::MaybeUninit;
 use std::time::Duration;
 
-use crate::display::{AnyDisplay, PixelDisplay};
+use crate::display::{AnyDisplay, PixelDisplay, SegmentDisplay};
+use crate::font_7seg;
 use crate::framebuf;
 use super::{Widget, CancelToken, sleep_or_cancel};
 
@@ -44,22 +45,32 @@ impl Clock {
         disp.write_framebuffer(&frame);
         sleep_or_cancel(cancel, duration)
     }
-}
 
-impl Widget for Clock {
-    fn name(&self) -> &str {
-        "clock"
+    fn show_segs(
+        &self,
+        disp: &mut dyn SegmentDisplay,
+        segs: &[u16; 4],
+        colon: bool,
+        duration: Duration,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        disp.write_segments(segs, colon);
+        sleep_or_cancel(cancel, duration)
     }
 
-    fn run(&mut self, display: &mut AnyDisplay, cancel: &CancelToken) -> Result<()> {
-        let disp = match display {
-            AnyDisplay::Pixel(ref mut d) => d.as_mut(),
-            AnyDisplay::Segment(_) => {
-                // TODO: segment clock variant
-                anyhow::bail!("clock widget does not yet support segment displays");
-            }
-        };
+    fn build_segs(&self, hour: u8, minute: u8) -> [u16; 4] {
+        let mut segs = [0u16; 4];
+        // Leading blank only in 12h mode when hour < 10
+        if self.format_24h || hour >= 10 {
+            segs[0] = font_7seg::digit(hour / 10) as u16;
+        }
+        segs[1] = font_7seg::digit(hour % 10) as u16;
+        segs[2] = font_7seg::digit(minute / 10) as u16;
+        segs[3] = font_7seg::digit(minute % 10) as u16;
+        segs
+    }
 
+    fn run_pixel(&self, disp: &mut dyn PixelDisplay, cancel: &CancelToken) -> Result<()> {
         loop {
             if cancel.is_cancelled() {
                 return Ok(());
@@ -98,6 +109,49 @@ impl Widget for Clock {
                 self.show_text(disp, &colon_on, Duration::from_millis(500), cancel)?;
                 self.show_text(disp, &colon_off, Duration::from_millis(500), cancel)?;
             }
+        }
+    }
+
+    fn run_segment(&self, disp: &mut dyn SegmentDisplay, cancel: &CancelToken) -> Result<()> {
+        loop {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+
+            let (hour_raw, minute) = local_hour_minute();
+            let is_pm = hour_raw >= 12;
+
+            let hour = if self.format_24h {
+                hour_raw
+            } else {
+                let h = hour_raw % 12;
+                if h == 0 { 12 } else { h }
+            };
+
+            let segs = self.build_segs(hour, minute);
+
+            if !self.format_24h && is_pm {
+                self.show_segs(disp, &segs, true,  Duration::from_millis(150), cancel)?;
+                self.show_segs(disp, &segs, false, Duration::from_millis(200), cancel)?;
+                self.show_segs(disp, &segs, true,  Duration::from_millis(150), cancel)?;
+                self.show_segs(disp, &segs, false, Duration::from_millis(500), cancel)?;
+            } else {
+                self.show_segs(disp, &segs, true,  Duration::from_millis(500), cancel)?;
+                self.show_segs(disp, &segs, false, Duration::from_millis(500), cancel)?;
+            }
+        }
+    }
+}
+
+impl Widget for Clock {
+    fn name(&self) -> &str {
+        "clock"
+    }
+
+    fn run(&mut self, display: &mut AnyDisplay, cancel: &CancelToken) -> Result<()> {
+        match display {
+            AnyDisplay::Pixel(d) => self.run_pixel(d.as_mut(), cancel),
+            AnyDisplay::Segment(d) => self.run_segment(d.as_mut(), cancel),
         }
     }
 }

@@ -15,13 +15,20 @@ opt-level = "z"
 
 [dependencies]
 log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.50", default-features = false, features = ["alloc", "binstart"] }
 anyhow = "1"
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
+# ESP-IDF bindings — only needed for the firmware target. Keeping this
+# target-gated lets `cargo test --target <host>` build pure modules
+# (font, font_7seg, framebuf, tm1637_proto) without an ESP toolchain.
+[target.'cfg(target_os = "espidf")'.dependencies]
+esp-idf-svc = { version = "0.50", default-features = false, features = ["alloc", "binstart"] }
+
 [build-dependencies]
-embuild = "0.33"
+# `espidf` feature is needed so build.rs can name `embuild::espidf::...`
+# even on host builds, where the runtime check in build.rs skips the call.
+embuild = { version = "0.33", features = ["espidf"] }
 
 [features]
 default = ["max7219"]

@@ -6,7 +6,7 @@ Rust (esp-idf-hal std) firmware for ESP32-C3 driving LED displays. Fetches displ
 
 Supports:
 - **MAX7219** — 32x8 pixel matrix (SPI, 4 daisy-chained chips)
-- **TM1637** — 4-digit 7-segment (GPIO bit-bang) — driver not yet implemented
+- **TM1637** — 4-digit 7-segment (GPIO bit-bang, custom 2-wire protocol)
 
 Single display per device, selected via cargo feature.
 
@@ -69,6 +69,19 @@ ESP32-C3 to MAX7219 (4 daisy-chained 8x8 modules):
 | 5V | VCC | Power |
 | GND | GND | Ground |
 
+### Hardware Wiring (TM1637)
+
+ESP32-C3 to TM1637 (4-digit 7-segment module):
+
+| ESP32-C3 Pin | TM1637 Pin | Function |
+|-------------|-----------|----------|
+| GPIO4 | CLK | Bit-bang clock |
+| GPIO5 | DIO | Bit-bang data |
+| 3V3 or 5V | VCC | Power (most modules accept either) |
+| GND | GND | Ground |
+
+Modules typically include on-board pull-ups on CLK and DIO. Both lines are driven push-pull by the firmware; the ACK slot is released high without sampling (matches the Go/Python sister projects and works on all tested modules).
+
 ## Architecture
 
 ### Two-Thread Engine Model
@@ -91,18 +104,19 @@ Mirrors `led-kurokku-go`:
 ### Modules
 
 - **`config`** — `AppConfig` loaded from NVS with compile-time env var fallbacks. `open_nvs()` opens the `kurokku` NVS namespace.
-- **`display/`** — Trait definitions + drivers. `max7219.rs` (SPI), `tm1637.rs` (planned).
+- **`display/`** — Trait definitions + drivers. `max7219.rs` (SPI), `tm1637.rs` (bit-banged 2-wire; 5µs bit delay via `Ets::delay_us`).
 - **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion.
 - **`font`** — 5x7 ASCII bitmap font (columns, bit 0 = top row). `render_text()` joins glyphs with 1-column gaps.
+- **`font_7seg`** — character → 7-segment bitmask table (u8). `encode(char)`, `digit(u8)`, `encode_text(&str)`. Table ported from Go `segfont.Seg7` / Python `SEGMENTS`. `encode_text` folds `.` into the previous digit's DP bit (0x80).
 - **`framebuf`** — `Frame = [u8; 32]`, column-major. `blit_text`, `blit_text_centered`, `set_pixel`.
 - **`network/`** — `InstructionSource` trait (polling now, WebSocket later). `polling.rs` implements HTTP GET polling. `WidgetInstruction` enum for server commands.
 - **`ota`** — `perform_ota(url)` downloads firmware, flashes inactive OTA partition, reboots. Uses ESP-IDF's built-in two-OTA partition table.
-- **`widget/`** — `Widget` trait (`name`, `run`). `CancelToken` for cooperative cancellation. `sleep_or_cancel` polls at 50ms granularity.
-  - `clock` — 24h/12h with AM/PM double-blink pattern (ported from Go)
-  - `message` — text display: static centered if ≤32px wide, scrolling otherwise
-  - `animation` — visual animations: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns)
-  - `raw_render` — dumb renderer: server sends pixel/segment data directly
-  - `status` — shows IP address, errors, startup messages (scrolls if > 32px)
+- **`widget/`** — `Widget` trait (`name`, `run`). `CancelToken` for cooperative cancellation. `sleep_or_cancel` polls at 50ms granularity. Each widget dispatches on `AnyDisplay` to render on pixel or segment backends.
+  - `clock` — 24h/12h with AM/PM double-blink pattern. Segment variant renders digits via `font_7seg::digit` with leading blank in 12h mode.
+  - `message` — pixel: static centered if ≤32px wide, scrolling otherwise. Segment: static if fits in display length, otherwise window scroll (pad `width` blanks each side, slide 1 char per tick).
+  - `animation` — pixel: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns). Segment: `static` (random segments), `matrix_rain` (a→f+b→g→e+c→d cascade per digit); `pong` returns Ok immediately on segment so engine reverts to clock.
+  - `raw_render` — dumb renderer: server sends pixel/segment data directly.
+  - `status` — shows IP address, errors, startup messages. Pixel scrolls if > 32px; segment scrolls if > display length (250ms cadence).
 - **`wifi`** — `connect()` blocks until WiFi + IP. `sync_ntp()` returns SNTP handle for periodic re-sync.
 
 ### Server API Contract
@@ -110,6 +124,8 @@ Mirrors `led-kurokku-go`:
 ```
 GET /api/v1/devices/{device_id}/instruction?display_type=max7219
 ```
+
+`display_type` is set by the firmware based on the active cargo feature: `max7219` or `tm1637`.
 
 Response envelope:
 
@@ -137,11 +153,11 @@ All top-level fields are optional. `brightness` (0-15) overrides display brightn
 ```
 `scroll_speed_ms` defaults to `50`. `repeats` defaults to `1`; use `-1` for infinite. After all repeats, reverts to clock.
 
-**animation** — visual animation on pixel display:
+**animation** — visual animation:
 ```json
 { "type": "animation", "animation": "pong", "duration_secs": 30 }
 ```
-`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock.
+`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock. On 7-segment displays, `static` and `matrix_rain` render segment-appropriate variants; `pong` finishes immediately and reverts to clock.
 
 **raw_pixel** — direct framebuffer control (32 bytes, one per column):
 ```json
