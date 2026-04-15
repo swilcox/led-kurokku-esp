@@ -74,13 +74,13 @@ Or see [other install methods](https://github.com/casey/just#installation).
 | Component | Quantity | Notes |
 |-----------|----------|-------|
 | ESP32-C3 development board | 1 | Any board with USB-C and exposed GPIO pins. Common options: ESP32-C3-DevKitM-1, Seeed XIAO ESP32C3, WeAct ESP32-C3 |
-| MAX7219 LED matrix module (4-in-1) | 1 | Look for "MAX7219 dot matrix module 4 in 1" — these come as a single board with four 8x8 LED matrices daisy-chained together, giving you a 32x8 pixel display |
-| Jumper wires (female-to-female) | 5 | For connecting the ESP32-C3 to the LED matrix |
+| Display module | 1 | **Either** a MAX7219 4-in-1 matrix (32x8 pixels) **or** a TM1637 4-digit 7-segment clock module. Choose based on whether you want graphics + scrolling text or just a clock/numeric readout. |
+| Jumper wires (female-to-female) | 4–5 | 4 for TM1637, 5 for MAX7219 |
 | USB-C cable | 1 | For power and flashing |
 
 You can find all of these on Amazon, AliExpress, or your preferred electronics supplier. The total cost is typically under $15.
 
-### Wiring
+### Wiring — MAX7219 (32x8 matrix)
 
 Connect the ESP32-C3 to the MAX7219 module with 5 wires:
 
@@ -99,6 +99,25 @@ GND      ───────  GND   (ground)
 - The MAX7219 needs **5V** power. Most ESP32-C3 dev boards have a 5V pin that passes through USB power directly — use that, not the 3.3V pin.
 - GPIO6, GPIO7, and GPIO10 are the default SPI pins for the ESP32-C3. If your board labels them differently, check the pinout diagram for your specific board.
 - The MAX7219 module's DIN/CLK/CS labels are usually printed on the PCB. Make sure you connect to the **input** side (not the output side used for daisy-chaining additional modules).
+
+### Wiring — TM1637 (4-digit 7-segment)
+
+Connect the ESP32-C3 to the TM1637 module with 4 wires:
+
+```
+ESP32-C3          TM1637 Module
+─────────         ─────────────
+GPIO4    ───────  CLK   (bit-bang clock)
+GPIO5    ───────  DIO   (bit-bang data)
+3V3      ───────  VCC   (power; most modules also accept 5V)
+GND      ───────  GND   (ground)
+```
+
+**Important notes:**
+
+- The TM1637 is **not** I²C — it's a custom 2-wire protocol. The firmware bit-bangs both lines.
+- Most TM1637 modules include on-board pull-up resistors on CLK and DIO, so no external pull-ups are needed.
+- Both 3.3V and 5V typically work; start with 3.3V for safety.
 
 ## 3. Configuration
 
@@ -173,14 +192,18 @@ NVS values persist across reboots and firmware updates.
 # List all available commands
 just
 
-# Build debug firmware
-just build
+# --- MAX7219 (default) ---
+just build              # debug
+just build-release      # release
+just deploy             # build release + flash
 
-# Build release firmware (smaller, optimized)
-just build-release
+# --- TM1637 ---
+just build-tm1637           # debug
+just build-tm1637-release   # release
+just deploy-tm1637          # build release + flash
 
-# Build release and flash in one step
-just deploy
+# --- Tests (host, no ESP toolchain needed) ---
+just test
 ```
 
 ### Manual Build
@@ -195,8 +218,11 @@ export KUROKKU_SERVER_URL="http://192.168.1.100:8080"
 export KUROKKU_DEVICE_ID="esp32-001"
 export KUROKKU_TZ="CST6CDT,M3.2.0,M11.1.0"
 
-# Build
+# Build (MAX7219 is the default feature)
 cargo build --release
+
+# For TM1637 instead, disable the default feature:
+# cargo build --release --no-default-features --features tm1637
 
 # Flash and monitor
 espflash flash target/riscv32imc-esp-espidf/release/led-kurokku-esp --monitor

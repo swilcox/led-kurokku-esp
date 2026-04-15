@@ -76,6 +76,27 @@ pub fn sync_ntp() -> Result<EspSntp<'static>> {
     Ok(sntp)
 }
 
+/// If the STA is disconnected, try to reconnect once. Returns Ok(true) if a
+/// reconnect was attempted and succeeded, Ok(false) if already connected.
+/// On reconnect failure, returns Err — caller should keep running and retry
+/// on the next poll interval rather than panicking.
+pub fn reconnect_if_down(wifi: &mut BlockingWifi<EspWifi<'static>>) -> Result<bool> {
+    let connected = wifi
+        .is_connected()
+        .map_err(|e| anyhow::anyhow!("is_connected failed: {}", e))?;
+    if connected {
+        return Ok(false);
+    }
+
+    log::warn!("WiFi disconnected — attempting reconnect");
+    wifi.connect()
+        .map_err(|e| anyhow::anyhow!("reconnect failed: {}", e))?;
+    wifi.wait_netif_up()
+        .map_err(|e| anyhow::anyhow!("netif up failed after reconnect: {}", e))?;
+    log::info!("WiFi reconnected");
+    Ok(true)
+}
+
 /// Apply a POSIX TZ string to the C runtime so `localtime_r` honors it.
 /// Call this after NTP sync.
 pub fn set_timezone(tz: &str) -> Result<()> {

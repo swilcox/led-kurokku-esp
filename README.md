@@ -9,9 +9,10 @@ Sister project to [led-kurokku-go](https://github.com/swilcox/led-kurokku-go) (R
 | Display | Interface | Status |
 |---------|-----------|--------|
 | **MAX7219** — 32x8 LED matrix (4 daisy-chained 8x8 modules) | SPI | Implemented |
-| **TM1637** — 4-digit 7-segment | GPIO bit-bang | Planned |
+| **TM1637** — 4-digit 7-segment | GPIO bit-bang | Implemented |
 
-One display per device, selected at compile time via cargo feature flags.
+One display per device, selected at compile time via cargo feature flags
+(`--features max7219` or `--features tm1637 --no-default-features`).
 
 ## Quick Start
 
@@ -59,26 +60,38 @@ If the server is unreachable, the device gracefully falls back to showing a cloc
 
 ```
 src/
-├── main.rs          # Startup sequence: display → WiFi → NTP → engine
-├── config.rs        # NVS + compile-time env var configuration
-├── engine.rs        # Two-thread display loop
-├── wifi.rs          # WiFi connection + NTP sync
-├── ota.rs           # Over-the-air firmware updates
-├── font.rs          # 5x7 ASCII bitmap font
-├── framebuf.rs      # 32-byte column-major framebuffer
+├── main.rs            # Startup sequence: display → WiFi → NTP → engine
+├── config.rs          # NVS + compile-time env var configuration
+├── engine.rs          # Two-thread display loop
+├── wifi.rs            # WiFi connection + NTP sync
+├── ota.rs             # Over-the-air firmware updates
+├── font.rs            # 5x7 ASCII bitmap font
+├── font_7seg.rs       # 7-segment character table + DP folding
+├── framebuf.rs        # 32-byte column-major framebuffer
 ├── display/
-│   ├── mod.rs       # Display/PixelDisplay/SegmentDisplay traits
-│   └── max7219.rs   # MAX7219 SPI driver
+│   ├── mod.rs         # Display/PixelDisplay/SegmentDisplay traits
+│   ├── max7219.rs     # MAX7219 SPI driver
+│   ├── tm1637.rs      # TM1637 bit-banged 2-wire driver
+│   └── tm1637_proto.rs # Pure byte-encoding helpers (host-testable)
 ├── network/
-│   ├── mod.rs       # InstructionSource trait + types
-│   └── polling.rs   # HTTP polling implementation
+│   ├── mod.rs         # InstructionSource trait + types
+│   └── polling.rs     # HTTP polling implementation
 └── widget/
-    ├── mod.rs       # Widget trait + CancelToken
-    ├── clock.rs     # Time display
-    ├── message.rs   # Text display (static/scrolling)
-    ├── animation.rs # Visual animations
-    ├── raw_render.rs # Direct pixel/segment control
-    └── status.rs    # IP address, errors, startup info
+    ├── mod.rs         # Widget trait + CancelToken
+    ├── clock.rs       # Time display
+    ├── message.rs     # Text display (static/scrolling)
+    ├── animation.rs   # Visual animations
+    ├── raw_render.rs  # Direct pixel/segment control
+    └── status.rs      # IP address, errors, startup info
+```
+
+## Testing
+
+Pure modules (font, font_7seg, framebuf, tm1637_proto) have unit tests that run
+on the host — no ESP toolchain required:
+
+```bash
+just test
 ```
 
 ## License

@@ -30,6 +30,8 @@ use esp_idf_svc::hal::peripherals::Peripherals;
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 #[cfg(target_os = "espidf")]
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "espidf")]
 use std::time::Duration;
 
 #[cfg(target_os = "espidf")]
@@ -127,7 +129,7 @@ fn run(
         let _ = status.run(&mut any_disp, &cancel);
     }
 
-    let _wifi = if cfg.has_wifi_config() {
+    let wifi_handle: Option<engine::SharedWifi> = if cfg.has_wifi_config() {
         match wifi::connect(&cfg.wifi_ssid, &cfg.wifi_password, modem, sysloop, nvs_partition) {
             Ok(w) => {
                 let ip = wifi::get_ip(&w).unwrap_or_else(|| "?.?.?.?".to_string());
@@ -158,7 +160,7 @@ fn run(
                     Err(e) => log::warn!("Could not read OTA info: {}", e),
                 }
 
-                Some(w)
+                Some(Arc::new(Mutex::new(w)))
             }
             Err(e) => {
                 log::warn!("WiFi failed: {}", e);
@@ -183,5 +185,5 @@ fn run(
 
     let eng = engine::Engine::new(cfg);
     log::info!("Starting engine");
-    eng.run(any_disp, source);
+    eng.run(any_disp, source, wifi_handle);
 }

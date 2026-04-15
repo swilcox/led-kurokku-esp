@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 use log;
 
 use crate::config::AppConfig;
@@ -9,6 +10,8 @@ use crate::network::{InstructionSource, WidgetInstruction};
 use crate::widget::clock::Clock;
 use crate::widget::status::Status;
 use crate::widget::{CancelToken, Widget};
+
+pub type SharedWifi = Arc<Mutex<BlockingWifi<EspWifi<'static>>>>;
 
 /// Shared state between network and display threads.
 struct SharedState {
@@ -39,7 +42,16 @@ impl Engine {
     ///
     /// - `display`: the initialized display
     /// - `source`: the instruction source (HTTP poller, WebSocket, etc.)
-    pub fn run(&self, mut display: AnyDisplay, mut source: Box<dyn InstructionSource>) -> ! {
+    /// - `wifi`: optional shared WiFi handle. When present, the network
+    ///   thread will attempt to reconnect after a poll failure if the STA
+    ///   is no longer associated. None disables reconnect (e.g., offline
+    ///   boot with no credentials).
+    pub fn run(
+        &self,
+        mut display: AnyDisplay,
+        mut source: Box<dyn InstructionSource>,
+        wifi: Option<SharedWifi>,
+    ) -> ! {
         let shared = Arc::new(Mutex::new(SharedState {
             pending_instruction: None,
             pending_brightness: None,
@@ -49,11 +61,12 @@ impl Engine {
 
         // Network thread: polls/receives instructions, updates shared state
         let shared_net = shared.clone();
+        let wifi_net = wifi.clone();
         let _net_thread = std::thread::Builder::new()
             .name("net".into())
             .stack_size(6144)
             .spawn(move || {
-                network_loop(&mut *source, &shared_net);
+                network_loop(&mut *source, &shared_net, wifi_net);
             })
             .expect("Failed to spawn network thread");
 
@@ -62,7 +75,11 @@ impl Engine {
     }
 
     fn display_loop(&self, display: &mut AnyDisplay, shared: &Arc<Mutex<SharedState>>) -> ! {
-        let mut current_widget: Box<dyn Widget> = Box::new(Clock::new(self.config.format_24h));
+        // Track the most recently requested clock format so fallbacks (widget
+        // finished, error, failed OTA) stay consistent with what the server
+        // last asked for — not the compile-time config default.
+        let mut current_format_24h = self.config.format_24h;
+        let mut current_widget: Box<dyn Widget> = Box::new(Clock::new(current_format_24h));
         let mut cancel = shared.lock().unwrap().current_cancel.clone();
 
         loop {
@@ -97,7 +114,7 @@ impl Engine {
                     }
 
                     // Revert to clock after failed OTA
-                    current_widget = Box::new(Clock::new(self.config.format_24h));
+                    current_widget = Box::new(Clock::new(current_format_24h));
                     let new_cancel = CancelToken::new();
                     shared.lock().unwrap().current_cancel = new_cancel.clone();
                     cancel = new_cancel;
@@ -109,6 +126,7 @@ impl Engine {
 
                     current_widget = match instruction {
                         WidgetInstruction::Clock { format_24h } => {
+                            current_format_24h = format_24h;
                             Box::new(Clock::new(format_24h))
                         }
                         WidgetInstruction::Message { text, scroll_speed_ms, repeats } => {
@@ -158,7 +176,7 @@ impl Engine {
                 Ok(()) => {
                     // Widget finished (e.g. message done scrolling) — revert to clock
                     log::info!("Widget finished, reverting to clock");
-                    current_widget = Box::new(Clock::new(self.config.format_24h));
+                    current_widget = Box::new(Clock::new(current_format_24h));
                     let new_cancel = CancelToken::new();
                     shared.lock().unwrap().current_cancel = new_cancel.clone();
                     cancel = new_cancel;
@@ -170,7 +188,7 @@ impl Engine {
                         continue;
                     }
                     log::error!("Widget error: {}", e);
-                    current_widget = Box::new(Clock::new(self.config.format_24h));
+                    current_widget = Box::new(Clock::new(current_format_24h));
                     let new_cancel = CancelToken::new();
                     shared.lock().unwrap().current_cancel = new_cancel.clone();
                     cancel = new_cancel;
@@ -183,7 +201,11 @@ impl Engine {
 const MAX_CONSECUTIVE_FAILURES: u32 = 60;
 
 /// Network thread loop. Polls the instruction source and updates shared state.
-fn network_loop(source: &mut dyn InstructionSource, shared: &Arc<Mutex<SharedState>>) {
+fn network_loop(
+    source: &mut dyn InstructionSource,
+    shared: &Arc<Mutex<SharedState>>,
+    wifi: Option<SharedWifi>,
+) {
     // Track the last instruction we pushed so repeated identical polls don't
     // restart the active widget every interval. The server is expected to
     // return the *current* desired state on each poll, not a diff.
@@ -221,6 +243,23 @@ fn network_loop(source: &mut dyn InstructionSource, shared: &Arc<Mutex<SharedSta
                     "Instruction fetch failed ({}/{}): {}",
                     consecutive_failures, MAX_CONSECUTIVE_FAILURES, e
                 );
+
+                // If WiFi dropped (router rebooted, AP out of range), reconnect
+                // here so we recover in one poll interval instead of waiting
+                // for the MAX_CONSECUTIVE_FAILURES reboot escape hatch. If the
+                // reconnect itself fails we just keep counting toward reboot.
+                if let Some(ref wifi) = wifi {
+                    let mut guard = wifi.lock().unwrap();
+                    match crate::wifi::reconnect_if_down(&mut guard) {
+                        Ok(true) => {
+                            log::info!("WiFi restored — resetting failure counter");
+                            consecutive_failures = 0;
+                        }
+                        Ok(false) => {} // still connected, poll failure was something else
+                        Err(e) => log::warn!("Reconnect attempt failed: {}", e),
+                    }
+                }
+
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     log::error!("Too many consecutive failures, rebooting...");
                     unsafe { esp_idf_svc::sys::esp_restart(); }

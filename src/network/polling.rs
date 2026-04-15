@@ -33,8 +33,11 @@ impl InstructionSource for HttpPoller {
             self.base_url, self.device_id, self.display_type
         );
 
+        // Attach the ESP-IDF TLS cert bundle so https:// URLs work. Harmless
+        // for plain http://. Bundle is enabled via sdkconfig.defaults.
         let mut connection = EspHttpConnection::new(&HttpConfig {
             timeout: Some(Duration::from_secs(10)),
+            crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
             ..Default::default()
         })
         .map_err(|e| anyhow::anyhow!("HTTP connection failed: {}", e))?;
