@@ -114,7 +114,7 @@ Mirrors `led-kurokku-go`:
 - **`widget/`** — `Widget` trait (`name`, `run`). `CancelToken` for cooperative cancellation. `sleep_or_cancel` polls at 50ms granularity. Each widget dispatches on `AnyDisplay` to render on pixel or segment backends.
   - `clock` — 24h/12h with AM/PM double-blink pattern. Segment variant renders digits via `font_7seg::digit` with leading blank in 12h mode.
   - `message` — pixel: static centered if ≤32px wide, scrolling otherwise. Segment: static if fits in display length, otherwise window scroll (pad `width` blanks each side, slide 1 char per tick).
-  - `animation` — pixel: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns). Segment: `static` (random segments), `matrix_rain` (a→f+b→g→e+c→d cascade per digit); `pong` returns Ok immediately on segment so engine reverts to clock.
+  - `animation` — pixel: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns). Segment: `static` (random segments), `pong` (vertical-bar "ball" bouncing L/R across each digit in turn: left verts → right verts → next digit), `matrix_rain` (per-side raindrops per digit, top-vert → bottom-vert → bottom-horizontal, multiple concurrent drops).
   - `raw_render` — dumb renderer: server sends pixel/segment data directly.
   - `status` — shows IP address, errors, startup messages. Pixel scrolls if > 32px; segment scrolls if > display length (250ms cadence).
 - **`wifi`** — `connect()` blocks until WiFi + IP. `sync_ntp()` returns SNTP handle for periodic re-sync.
@@ -157,7 +157,7 @@ All top-level fields are optional. `brightness` (0-15) overrides display brightn
 ```json
 { "type": "animation", "animation": "pong", "duration_secs": 30 }
 ```
-`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock. On 7-segment displays, `static` and `matrix_rain` render segment-appropriate variants; `pong` finishes immediately and reverts to clock.
+`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock. On 7-segment displays, all three animations render segment-appropriate variants.
 
 **raw_pixel** — direct framebuffer control (32 bytes, one per column):
 ```json

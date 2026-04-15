@@ -49,9 +49,7 @@ impl Widget for Animation {
                 match self.animation {
                     AnimationType::Static => run_segment_static(disp, cancel, &mut rng, self.duration, start),
                     AnimationType::MatrixRain => run_segment_rain(disp, cancel, &mut rng, self.duration, start),
-                    // Pong has no meaningful 7-seg analog. Return Ok so the
-                    // engine reverts to clock rather than error-looping.
-                    AnimationType::Pong => Ok(()),
+                    AnimationType::Pong => run_segment_pong(disp, cancel, self.duration, start),
                 }
             }
         }
@@ -237,41 +235,101 @@ fn run_segment_rain(
     duration: Duration,
     start: std::time::Instant,
 ) -> Result<()> {
-    // 7-seg rain stages: top (a) → upper sides (f,b) → middle (g) →
-    // lower sides (e,c) → bottom (d) → off. Matches the Go segment Rain.
-    const STAGES: [u16; 6] = [0x01, 0x22, 0x40, 0x14, 0x08, 0x00];
+    // A "raindrop" lives on one side (left/right) of one digit and falls
+    // through 3 stages: top vertical → bottom vertical → bottom horizontal.
+    // Multiple drops can run in parallel; we OR their contributions into
+    // the frame so overlapping digits render both sides' lit segments.
+    const TOP_LEFT: u16 = 0x20; // f
+    const BOT_LEFT: u16 = 0x10; // e
+    const TOP_RIGHT: u16 = 0x02; // b
+    const BOT_RIGHT: u16 = 0x04; // c
+    const BOTTOM: u16 = 0x08; // d
 
-    let frame_interval = Duration::from_millis(120);
+    let frame_interval = Duration::from_millis(150);
     let n = disp.display_length();
-    let mut drops: Vec<i16> = vec![-1; n];
+    // 2 slots per digit — one per side. -1 = idle, 0..=2 = falling stage.
+    let mut drops: Vec<i8> = vec![-1; n * 2];
 
     loop {
         if check_timeout(cancel, duration, start)? {
             return Ok(());
         }
 
-        // Randomly spawn new drops on idle digits
+        // Spawn new drops on idle slots. 1-in-5 per slot per frame gives a
+        // steady-but-not-dense rain on 4 digits.
         for d in drops.iter_mut() {
-            if *d < 0 && rng.next_range(6) == 0 {
+            if *d < 0 && rng.next_range(5) == 0 {
                 *d = 0;
             }
         }
 
+        // Render current state.
         let mut segs = vec![0u16; n];
-        for (i, d) in drops.iter_mut().enumerate() {
+        for (i, d) in drops.iter().enumerate() {
             if *d < 0 {
                 continue;
             }
-            if (*d as usize) < STAGES.len() {
-                segs[i] = STAGES[*d as usize];
-            }
-            *d += 1;
-            if *d >= (STAGES.len() + 2) as i16 {
-                *d = -1;
+            let digit = i / 2;
+            let is_right = (i % 2) == 1;
+            let seg = match *d {
+                0 => if is_right { TOP_RIGHT } else { TOP_LEFT },
+                1 => if is_right { BOT_RIGHT } else { BOT_LEFT },
+                2 => BOTTOM,
+                _ => 0,
+            };
+            segs[digit] |= seg;
+        }
+        disp.write_segments(&segs, false);
+
+        // Advance each active drop; retire after the final stage.
+        for d in drops.iter_mut() {
+            if *d >= 0 {
+                *d += 1;
+                if *d > 2 {
+                    *d = -1;
+                }
             }
         }
 
+        sleep_or_cancel(cancel, frame_interval)?;
+    }
+}
+
+fn run_segment_pong(
+    disp: &mut dyn SegmentDisplay,
+    cancel: &CancelToken,
+    duration: Duration,
+    start: std::time::Instant,
+) -> Result<()> {
+    // Bounce a "ball" (pair of vertical segments) side-to-side across all
+    // digits: digit0-left → digit0-right → digit1-left → digit1-right → ...
+    // → last-digit-right, then reverse. Each digit has 2 positions, so on a
+    // 4-digit display the ball traverses 8 positions before bouncing.
+    const LEFT_VERT: u16 = 0x30; // e + f
+    const RIGHT_VERT: u16 = 0x06; // b + c
+
+    let frame_interval = Duration::from_millis(150);
+    let n = disp.display_length();
+    let max_pos = (n * 2) as i32 - 1;
+    let mut pos: i32 = 0;
+    let mut dir: i32 = 1;
+
+    loop {
+        if check_timeout(cancel, duration, start)? {
+            return Ok(());
+        }
+
+        let mut segs = vec![0u16; n];
+        let digit = (pos as usize) / 2;
+        let is_right = (pos % 2) == 1;
+        segs[digit] = if is_right { RIGHT_VERT } else { LEFT_VERT };
         disp.write_segments(&segs, false);
+
+        pos += dir;
+        if pos >= max_pos || pos <= 0 {
+            dir = -dir;
+        }
+
         sleep_or_cancel(cancel, frame_interval)?;
     }
 }

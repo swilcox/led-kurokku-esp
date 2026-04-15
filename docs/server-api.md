@@ -89,9 +89,9 @@ Play a visual animation on the pixel display.
 
 Available animations:
 
-- **`static`** — TV noise / random pixels
-- **`pong`** — bouncing ball with AI-controlled paddles
-- **`matrix`** / **`matrix_rain`** — falling column effect
+- **`static`** — TV noise / random pixels. On 7-segment: random segment patterns with an occasional colon flicker.
+- **`pong`** — pixel: bouncing ball with AI-controlled paddles. On 7-segment: a vertical-bar "ball" bounces side-to-side across the digits (left verticals → right verticals → next digit, then reverses at the ends).
+- **`matrix`** / **`matrix_rain`** — pixel: falling column effect. On 7-segment: independent raindrops on the left and right side of each digit, each falling through top vertical → bottom vertical → bottom horizontal, with multiple drops active simultaneously.
 
 After the duration expires, the device reverts to showing a clock. Unknown animation names default to `static`.
 
