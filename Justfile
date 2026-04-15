@@ -11,9 +11,13 @@ build:
 build-release:
     cargo build --release
 
-# Build for TM1637 7-segment display
+# Build debug for TM1637 7-segment display
 build-tm1637:
     cargo build --features tm1637 --no-default-features
+
+# Build release for TM1637 7-segment display
+build-tm1637-release:
+    cargo build --release --features tm1637 --no-default-features
 
 # Flash release firmware and open serial monitor
 flash:
@@ -25,6 +29,9 @@ flash-debug:
 
 # Build release and flash in one step
 deploy: build-release flash
+
+# Build TM1637 release and flash in one step
+deploy-tm1637: build-tm1637-release flash
 
 # Run unit tests on the host (pure modules only: font, font_7seg, framebuf,
 # tm1637_proto). Overrides the default ESP target from .cargo/config.toml.
