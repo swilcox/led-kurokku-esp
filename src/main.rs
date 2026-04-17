@@ -16,6 +16,8 @@ mod network;
 #[cfg(target_os = "espidf")]
 mod ota;
 #[cfg(target_os = "espidf")]
+mod udp_log;
+#[cfg(target_os = "espidf")]
 mod widget;
 #[cfg(target_os = "espidf")]
 mod wifi;
@@ -38,7 +40,7 @@ use std::time::Duration;
 fn main() {
     // Initialize ESP-IDF logging and system services
     esp_idf_svc::sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
+    udp_log::init();
 
     log::info!("LED Kurokku ESP starting up...");
 
@@ -46,7 +48,7 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().unwrap();
     let nvs_partition = EspDefaultNvsPartition::take().unwrap();
 
-    // Load config from NVS (falls back to compile-time env vars)
+    // Load config from NVS. Provisioned via tools/provision.py.
     // Clone the partition handle — NVS partition is shared, WiFi needs one too
     let nvs = config::open_nvs(nvs_partition.clone()).expect("Failed to open NVS");
     let cfg = config::AppConfig::load(&nvs);
@@ -138,6 +140,10 @@ fn run(
                     let cancel = CancelToken::with_timeout(Duration::from_secs(3));
                     let mut status = widget::status::Status::new(&ip, Duration::from_secs(3));
                     let _ = status.run(&mut any_disp, &cancel);
+                }
+
+                if let Some(ref host) = cfg.syslog_host {
+                    udp_log::enable_udp(host, &cfg.device_id);
                 }
 
                 // Sync NTP — keep handle alive for periodic re-sync

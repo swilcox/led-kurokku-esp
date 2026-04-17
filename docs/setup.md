@@ -67,6 +67,22 @@ cargo install just
 
 Or see [other install methods](https://github.com/casey/just#installation).
 
+### uv (Python Runner)
+
+The device provisioning tool (`tools/provision.py`) is a single Python script that declares its own dependencies via [PEP 723 inline metadata](https://peps.python.org/pep-0723/). [uv](https://docs.astral.sh/uv/) resolves and caches those dependencies automatically — there is no `pip install` step.
+
+**macOS:**
+
+```bash
+brew install uv
+```
+
+**Linux:**
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ## 2. Hardware
 
 ### Shopping List
@@ -121,38 +137,51 @@ GND      ───────  GND   (ground)
 
 ## 3. Configuration
 
-### Environment Variables
+Firmware binaries are **generic** — no WiFi credentials, server URL, or device ID are baked in. All per-device configuration lives in NVS (Non-Volatile Storage) and is provisioned separately via a small Python script. This means a single signed OTA image can be distributed safely across every device in your fleet.
 
-Copy the example environment file and edit it with your values:
+On an un-provisioned device, the firmware boots, shows `KUROKKU`, then displays `NO CFG` because no WiFi credentials are present.
 
-```bash
-cp .env.example .env
-```
+### Create a Device Config File
 
-Edit `.env`:
+Per-device values live in `tools/devices/<device-id>.yaml`. These files are gitignored; only `tools/devices/example.yaml` is checked in as a template.
 
 ```bash
-# Your WiFi network name
-KUROKKU_WIFI_SSID=MyNetwork
-
-# Your WiFi password
-KUROKKU_WIFI_PASSWORD=secret
-
-# URL of your kurokku server (see led-kurokku-go)
-KUROKKU_SERVER_URL=http://192.168.1.100:8080
-
-# Unique ID for this device (used in server API calls)
-KUROKKU_DEVICE_ID=esp32-001
-
-# Timezone in POSIX format (this example is US Central with DST)
-KUROKKU_TZ=CST6CDT,M3.2.0,M11.1.0
+cp tools/devices/example.yaml tools/devices/my-device.yaml
 ```
 
-These values are baked into the firmware at compile time. If you change them, you need to rebuild and reflash.
+Edit `my-device.yaml`:
+
+```yaml
+# Required
+device_id: my-device
+wifi_ssid: MyNetwork
+wifi_pass: correcthorsebatterystaple
+server_url: http://192.168.1.100:8080
+tz: CST6CDT,M3.2.0,M11.1.0
+
+# Optional (omit to take firmware defaults)
+# format_24h: true          # default true
+# brightness: 4             # 0-15, default 4
+# poll_ms: 5000             # default 5000
+# syslog_host: 192.168.1.50:5514   # omit to disable UDP syslog
+```
+
+### Provision the Device
+
+Connect the device via USB-C, then:
+
+```bash
+just provision my-device                  # auto-detect serial port
+just provision my-device /dev/ttyUSB0     # or specify a port
+```
+
+The provisioning step writes to the NVS partition on the device. It's a one-time step per device — NVS is preserved across reboots and OTA updates. You only re-provision if credentials change.
+
+> **Note:** The provisioner replaces the entire NVS partition, which also clears ESP-IDF's own WiFi RF calibration data. The device re-calibrates on next boot; this is harmless but mentioned for awareness. A future captive-portal mode will update individual keys without wiping.
 
 ### Timezone Format
 
-The `KUROKKU_TZ` value uses the POSIX TZ format. Some common examples:
+The `tz` value in your device YAML uses the POSIX TZ format. Some common examples:
 
 | Timezone | Value |
 |----------|-------|
@@ -167,22 +196,21 @@ The `KUROKKU_TZ` value uses the POSIX TZ format. Some common examples:
 
 For other timezones, see [this POSIX TZ reference](https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html).
 
-### Runtime Configuration (NVS)
+### NVS Keys Reference
 
-Some settings can also be changed at runtime via NVS (Non-Volatile Storage) without reflashing. NVS values take priority over compile-time values.
+All keys live in the `kurokku` NVS namespace. The provisioner populates them from your YAML; the firmware reads them on boot.
 
-| NVS Key | Default | Description |
-|---------|---------|-------------|
-| `wifi_ssid` | from `.env` | WiFi network name |
-| `wifi_pass` | from `.env` | WiFi password |
-| `server_url` | from `.env` | Server base URL |
-| `device_id` | from `.env` | Device identifier |
-| `tz` | from `.env` | POSIX timezone string |
-| `format_24h` | `1` | 24-hour clock (1) or 12-hour (0) |
-| `brightness` | `4` | Display brightness, 0-15 |
-| `poll_ms` | `5000` | Server poll interval in milliseconds |
-
-NVS values persist across reboots and firmware updates.
+| NVS Key | Type | Default | Description |
+|---------|------|---------|-------------|
+| `wifi_ssid` | string | (empty) | WiFi network name — required |
+| `wifi_pass` | string | (empty) | WiFi password — required |
+| `server_url` | string | (empty) | Instruction server base URL — required |
+| `device_id` | string | `unprovisioned` | Device identifier for server API |
+| `tz` | string | `UTC0` | POSIX timezone string |
+| `syslog_host` | string | (unset) | UDP syslog target as `host:port` |
+| `format_24h` | u8 (0/1) | `1` | 24-hour clock (1) or 12-hour (0) |
+| `brightness` | u8 | `4` | Default display brightness, 0-15 |
+| `poll_ms` | i32 | `5000` | Server poll interval in milliseconds |
 
 ## 4. Building and Flashing
 
@@ -211,13 +239,6 @@ just test
 If you prefer not to use `just`:
 
 ```bash
-# Set environment variables (or export them)
-export KUROKKU_WIFI_SSID="MyNetwork"
-export KUROKKU_WIFI_PASSWORD="secret"
-export KUROKKU_SERVER_URL="http://192.168.1.100:8080"
-export KUROKKU_DEVICE_ID="esp32-001"
-export KUROKKU_TZ="CST6CDT,M3.2.0,M11.1.0"
-
 # Build (MAX7219 is the default feature)
 cargo build --release
 
@@ -226,6 +247,9 @@ cargo build --release
 
 # Flash and monitor
 espflash flash target/riscv32imc-esp-espidf/release/led-kurokku-esp --monitor
+
+# Provision the device (one-time)
+uv run tools/provision.py my-device
 ```
 
 ### First Build
@@ -241,12 +265,14 @@ The first build downloads and compiles the ESP-IDF SDK, which takes a while. You
 
 ### What to Expect on First Boot
 
-The display will show:
+After flashing and provisioning, the display will show:
 
 1. **"KUROKKU"** — firmware is starting
 2. **Connecting to WiFi** — may take a few seconds
 3. **IP address** — scrolls across the display once connected
 4. **Clock** — default display when no server instructions are active
+
+If the device hasn't been provisioned yet (no `just provision ...` run), it will show **"NO CFG"** after the banner and stop there.
 
 If the server is reachable, it will start following whatever instructions the server provides.
 
@@ -270,9 +296,13 @@ Make sure `ldproxy` is installed: `cargo install ldproxy`
 
 ### WiFi won't connect
 
-- Verify SSID and password in `.env` are correct
+- Verify SSID and password in `tools/devices/<your-device>.yaml` are correct, then re-run `just provision <your-device>` to write the corrected values to NVS
 - The ESP32-C3 only supports **2.4 GHz** WiFi — it cannot connect to 5 GHz networks
 - Check the serial monitor output for error messages
+
+### Display shows "NO CFG"
+
+The device has no WiFi credentials in NVS. Run `just provision <your-device>` to populate it from the matching YAML file in `tools/devices/`.
 
 ### Device reboots in a loop
 

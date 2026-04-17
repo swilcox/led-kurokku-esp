@@ -26,11 +26,22 @@ impl HttpPoller {
     }
 }
 
+/// Firmware version reported to the server on each poll. Combines the
+/// Cargo package version with the git short hash from build.rs
+/// (suffixed `-dirty` when the working tree had uncommitted changes).
+///
+/// The `+` separator is percent-encoded as `%2B` because we embed this
+/// directly in the query string — an unencoded `+` would be interpreted
+/// as a space under application/x-www-form-urlencoded. The server will
+/// see the decoded form, e.g. `0.1.0+abc1234`.
+const FIRMWARE_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "%2B", env!("KUROKKU_GIT_HASH"));
+
 impl InstructionSource for HttpPoller {
     fn next_instruction(&mut self) -> Result<Option<ServerResponse>> {
         let url = format!(
-            "{}/api/v1/devices/{}/instruction?display_type={}",
-            self.base_url, self.device_id, self.display_type
+            "{}/api/v1/devices/{}/instruction?display_type={}&firmware_version={}",
+            self.base_url, self.device_id, self.display_type, FIRMWARE_VERSION
         );
 
         // Attach the ESP-IDF TLS cert bundle so https:// URLs work. Harmless

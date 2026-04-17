@@ -14,48 +14,60 @@ Single display per device, selected via cargo feature.
 
 Requires nightly Rust toolchain with `rust-src` component (configured in `rust-toolchain.toml`). Uses `ldproxy` linker and `build-std` for `riscv32imc-esp-espidf` target (configured in `.cargo/config.toml`).
 
-```bash
-# 1. Copy .env.example to .env and fill in your values
-cp .env.example .env
+Firmware binaries are **generic**: no WiFi credentials, server URLs, or device IDs are baked into the `.bin`. All per-device config lives in NVS and is provisioned via `tools/provision.py` before first boot. This keeps a single signed OTA image safely distributable across every device on the fleet.
 
-# 2. Use just recipes (loads .env automatically)
+```bash
 just build            # debug build
 just build-release    # release build
 just flash            # flash release + monitor
 just deploy           # build-release then flash
-
-# Or manually with env vars
-KUROKKU_WIFI_SSID="MyNetwork" KUROKKU_WIFI_PASSWORD="secret" cargo build
 
 # Feature flags
 cargo build --features max7219   # default
 cargo build --features tm1637    # 7-segment display
 ```
 
-### Compile-Time Environment Variables
+### NVS Configuration Keys
 
-All are optional if the corresponding NVS key is set at runtime.
+All config is loaded from the `kurokku` NVS namespace on boot. Unset keys fall back to placeholder defaults in `src/config.rs` — the device will boot but refuse to join WiFi (`has_wifi_config()` returns false) until provisioned.
 
-| Env Var | NVS Key | Default | Description |
-|---------|---------|---------|-------------|
-| `KUROKKU_WIFI_SSID` | `wifi_ssid` | (empty) | WiFi network name |
-| `KUROKKU_WIFI_PASSWORD` | `wifi_pass` | (empty) | WiFi password |
-| `KUROKKU_SERVER_URL` | `server_url` | `http://192.168.1.100:8080` | Instruction server base URL |
-| `KUROKKU_DEVICE_ID` | `device_id` | `esp32-001` | Device identifier for server API |
-| `KUROKKU_TZ` | `tz` | `CST6CDT,M3.2.0,M11.1.0` | POSIX TZ string for local time |
-| — | `format_24h` | `1` (true) | 24-hour clock format (NVS-only, u8: 0 or 1) |
-| — | `brightness` | `4` | Default display brightness 0-15 (NVS-only) |
-| — | `poll_ms` | `5000` | Server poll interval in ms (NVS-only, stored as i32) |
+| NVS Key | Type | Default | Description |
+|---------|------|---------|-------------|
+| `wifi_ssid` | string | (empty) | WiFi network name — required |
+| `wifi_pass` | string | (empty) | WiFi password — required |
+| `server_url` | string | (empty) | Instruction server base URL — required |
+| `device_id` | string | `unprovisioned` | Device identifier for server API |
+| `tz` | string | `UTC0` | POSIX TZ string for local time |
+| `syslog_host` | string | (unset) | UDP syslog target as `host:port` |
+| `format_24h` | u8 (0/1) | `1` | 24-hour clock format |
+| `brightness` | u8 | `4` | Default display brightness 0-15 |
+| `poll_ms` | i32 | `5000` | Server poll interval in ms |
 
-NVS values take priority over compile-time env vars. NVS namespace: `kurokku`.
+### Provisioning a Device
+
+Per-device values live in `tools/devices/<device-id>.yaml` (gitignored except the template). See `tools/devices/example.yaml`.
+
+```bash
+# Copy template, edit, then flash NVS
+cp tools/devices/example.yaml tools/devices/kitchen-01.yaml
+# ...edit kitchen-01.yaml...
+just provision kitchen-01                  # auto-detect serial port
+just provision kitchen-01 /dev/ttyUSB0     # explicit port
+```
+
+Python dependencies are declared via PEP 723 inline script metadata in `tools/provision.py` and resolved automatically by `uv run` into a cached env — no manual install step. Requires `uv` (https://docs.astral.sh/uv/) on the host.
+
+The provisioning script reads the YAML, generates an NVS partition image with `nvs_partition_gen` (from the `esp-idf-nvs-partition-gen` package), and writes it to the NVS partition offset via `espflash write-bin`. The NVS partition is preserved across OTA updates, so you only provision once per device.
+
+**Caveat**: The script overwrites the entire NVS partition, which also clears ESP-IDF's own WiFi RF calibration data. The device re-calibrates on next boot — harmless but mentioned for awareness. A future captive-portal mode will update individual keys without wiping.
 
 ### Build Tooling Files
 
-- **`Justfile`** — build recipes with `dotenv-load`; run `just` to list available commands
-- **`.env`** — compile-time env vars (gitignored); copy from `.env.example`
+- **`Justfile`** — build recipes; run `just` to list available commands
 - **`rust-toolchain.toml`** — pins nightly channel, includes `rust-src` component
 - **`.cargo/config.toml`** — sets target to `riscv32imc-esp-espidf`, configures `ldproxy` linker, `build-std`, and `ESP_IDF_SDKCONFIG_DEFAULTS`
 - **`sdkconfig.defaults`** — ESP-IDF Kconfig overrides: 8KB main task stack, 1000Hz FreeRTOS tick (1ms sleep granularity), 4MB flash, two-OTA partition table, full TLS certificate bundle for HTTPS OTA
+- **`build.rs`** — exports `KUROKKU_GIT_HASH` (short hash + `-dirty` suffix if tree is modified) so firmware can report its version to the server
 
 ### Hardware Wiring (MAX7219)
 
@@ -103,7 +115,7 @@ Mirrors `led-kurokku-go`:
 
 ### Modules
 
-- **`config`** — `AppConfig` loaded from NVS with compile-time env var fallbacks. `open_nvs()` opens the `kurokku` NVS namespace.
+- **`config`** — `AppConfig` loaded exclusively from NVS; placeholder defaults for missing keys. `open_nvs()` opens the `kurokku` NVS namespace. Provisioned via `tools/provision.py`.
 - **`display/`** — Trait definitions + drivers. `max7219.rs` (SPI), `tm1637.rs` (bit-banged 2-wire; 5µs bit delay via `Ets::delay_us`).
 - **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion.
 - **`font`** — 5x7 ASCII bitmap font (columns, bit 0 = top row). `render_text()` joins glyphs with 1-column gaps.
@@ -117,15 +129,16 @@ Mirrors `led-kurokku-go`:
   - `animation` — pixel: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns). Segment: `static` (random segments), `pong` (vertical-bar "ball" bouncing L/R across each digit in turn: left verts → right verts → next digit), `matrix_rain` (per-side raindrops per digit, top-vert → bottom-vert → bottom-horizontal, multiple concurrent drops).
   - `raw_render` — dumb renderer: server sends pixel/segment data directly.
   - `status` — shows IP address, errors, startup messages. Pixel scrolls if > 32px; segment scrolls if > display length (250ms cadence).
+- **`udp_log`** — Optional UDP syslog (RFC5424). Composite logger wraps `EspLogger` (serial) + UDP sink. `init()` replaces `EspLogger::initialize_default()`. `enable_udp(host, device_id)` called after WiFi connects if `syslog_host` is configured. Fire-and-forget, non-blocking.
 - **`wifi`** — `connect()` blocks until WiFi + IP. `sync_ntp()` returns SNTP handle for periodic re-sync.
 
 ### Server API Contract
 
 ```
-GET /api/v1/devices/{device_id}/instruction?display_type=max7219
+GET /api/v1/devices/{device_id}/instruction?display_type=max7219&firmware_version=0.1.0%2Babc1234
 ```
 
-`display_type` is set by the firmware based on the active cargo feature: `max7219` or `tm1637`.
+`display_type` is set by the firmware based on the active cargo feature: `max7219` or `tm1637`. `firmware_version` combines the Cargo package version with the short git hash from `build.rs` (suffixed `-dirty` when the working tree had uncommitted changes at build time); the `+` separator is percent-encoded as `%2B` on the wire so the server sees the decoded form `0.1.0+abc1234`. The server can use this to gate OTAs or spot stale devices.
 
 Response envelope:
 

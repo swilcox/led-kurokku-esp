@@ -7,10 +7,16 @@ You'll need a running instance of the [led-kurokku-go](https://github.com/swilco
 ## Endpoint
 
 ```
-GET /api/v1/devices/{device_id}/instruction?display_type=max7219
+GET /api/v1/devices/{device_id}/instruction?display_type=max7219&firmware_version=0.1.0+abc1234
 ```
 
-The device sends its `device_id` (from config) and `display_type` (from the active cargo feature) as part of the request. The server uses these to decide what to display.
+The device sends three query parameters on every poll:
+
+| Parameter | Source | Description |
+|-----------|--------|-------------|
+| `device_id` (path) | NVS `device_id` key (provisioned) | Unique identifier for this device |
+| `display_type` | Active cargo feature | `max7219` or `tm1637` — lets the server tailor responses to the physical display |
+| `firmware_version` | `CARGO_PKG_VERSION` + short git hash | e.g. `0.1.0+abc1234`; a `-dirty` suffix is appended when the firmware was built from a modified working tree. The `+` separator is sent on the wire as `%2B` (so the firmware URL actually looks like `…&firmware_version=0.1.0%2Babc1234`); the server sees the decoded form. Use this value to gate OTAs, detect stale fleets, or reject malformed builds. |
 
 ## Response Format
 
@@ -154,7 +160,7 @@ Here's what the device expects back from a simple server:
 
 ```bash
 # The device will GET this endpoint:
-# GET /api/v1/devices/esp32-001/instruction?display_type=max7219
+# GET /api/v1/devices/my-device/instruction?display_type=max7219&firmware_version=0.1.0+abc1234
 
 # A minimal response showing a message:
 {

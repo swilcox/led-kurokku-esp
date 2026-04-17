@@ -1,0 +1,86 @@
+use std::net::UdpSocket;
+use std::sync::OnceLock;
+
+use esp_idf_svc::log::EspLogger;
+
+struct UdpTarget {
+    socket: UdpSocket,
+    target: String,
+    hostname: String,
+}
+
+static UDP_TARGET: OnceLock<UdpTarget> = OnceLock::new();
+
+static LOGGER: CompositeLogger = CompositeLogger {
+    esp: EspLogger::new(),
+};
+
+struct CompositeLogger {
+    esp: EspLogger,
+}
+
+impl log::Log for CompositeLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.esp.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        self.esp.log(record);
+
+        if let Some(udp) = UDP_TARGET.get() {
+            let pri = syslog_priority(record.level());
+            let module = record.module_path().unwrap_or("-");
+            // RFC5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
+            let msg = format!(
+                "<{}>1 - {} {} - - - {}",
+                pri,
+                udp.hostname,
+                module,
+                record.args(),
+            );
+            let _ = udp.socket.send_to(msg.as_bytes(), &udp.target);
+        }
+    }
+
+    fn flush(&self) {
+        self.esp.flush();
+    }
+}
+
+fn syslog_priority(level: log::Level) -> u8 {
+    // facility=1 (user-level) * 8 + severity
+    let severity = match level {
+        log::Level::Error => 3,
+        log::Level::Warn => 4,
+        log::Level::Info => 6,
+        log::Level::Debug => 7,
+        log::Level::Trace => 7,
+    };
+    8 + severity
+}
+
+pub fn init() {
+    log::set_logger(&LOGGER)
+        .map(|()| LOGGER.esp.initialize())
+        .expect("logger already set");
+}
+
+pub fn enable_udp(host: &str, device_id: &str) {
+    let socket = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("UDP log socket bind failed: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = socket.set_nonblocking(true) {
+        log::warn!("UDP socket set_nonblocking failed: {}", e);
+    }
+
+    let _ = UDP_TARGET.set(UdpTarget {
+        socket,
+        target: host.to_string(),
+        hostname: device_id.to_string(),
+    });
+    log::info!("UDP syslog enabled → {}", host);
+}

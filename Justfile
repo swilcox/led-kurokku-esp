@@ -1,5 +1,3 @@
-set dotenv-load
-
 default:
     just --list
 
@@ -37,3 +35,8 @@ deploy-tm1637: build-tm1637-release flash
 # tm1637_proto). Overrides the default ESP target from .cargo/config.toml.
 test:
     cargo test --target {{ `rustc -vV | awk '/^host/ {print $2}'` }} --no-default-features
+
+# Provision a device's NVS from tools/devices/<name>.yaml.
+# Usage: just provision kitchen-01 [/dev/ttyUSB0]
+provision device port="":
+    uv run tools/provision.py {{device}} {{ if port != "" { "--port " + port } else { "" } }}

@@ -23,16 +23,22 @@ If you just want to get up and running, here's the short version. See the [full 
 # - Rust nightly toolchain (handled by rust-toolchain.toml)
 # - ldproxy, espflash
 # - just (command runner)
+# - uv (for the provisioning tool)
 
-# 2. Clone and configure
+# 2. Clone
 git clone https://github.com/swilcox/led-kurokku-esp.git
 cd led-kurokku-esp
-cp .env.example .env
-# Edit .env with your WiFi credentials and server URL
 
-# 3. Build and flash
+# 3. Build and flash a generic firmware binary
 just deploy
+
+# 4. Provision this device's WiFi, server URL, etc. into NVS
+cp tools/devices/example.yaml tools/devices/my-device.yaml
+# ...edit my-device.yaml...
+just provision my-device
 ```
+
+Firmware binaries are generic — no WiFi credentials or device IDs are baked into the `.bin`. Per-device configuration lives in NVS and is provisioned separately with a small Python CLI, so a single signed OTA image is safe to distribute across every device on the fleet.
 
 ## Documentation
 
@@ -61,7 +67,7 @@ If the server is unreachable, the device gracefully falls back to showing a cloc
 ```
 src/
 ├── main.rs            # Startup sequence: display → WiFi → NTP → engine
-├── config.rs          # NVS + compile-time env var configuration
+├── config.rs          # NVS-backed configuration (provisioned via tools/provision.py)
 ├── engine.rs          # Two-thread display loop
 ├── wifi.rs            # WiFi connection + NTP sync
 ├── ota.rs             # Over-the-air firmware updates

@@ -4,8 +4,13 @@ use log;
 
 const NVS_NAMESPACE: &str = "kurokku";
 
-/// Application configuration.
-/// Values are loaded from NVS first, falling back to compile-time env vars.
+/// Application configuration, loaded exclusively from NVS.
+///
+/// Firmware binaries are generic: per-device values (WiFi credentials,
+/// server URL, device ID, etc.) must be provisioned into NVS via
+/// `tools/provision.py` before the device can do useful work. On an
+/// unprovisioned device, `has_wifi_config()` returns false and the engine
+/// falls back to a status widget showing "NO WIFI".
 pub struct AppConfig {
     pub wifi_ssid: String,
     pub wifi_password: String,
@@ -16,29 +21,23 @@ pub struct AppConfig {
     pub poll_interval_ms: u64,
     /// POSIX TZ string, e.g. "CST6CDT,M3.2.0,M11.1.0" for US Central.
     pub tz: String,
+    /// UDP syslog target as "host:port", e.g. "192.168.1.50:5514". None = disabled.
+    pub syslog_host: Option<String>,
 }
 
 impl AppConfig {
-    /// Load config from NVS, falling back to compile-time defaults.
+    /// Load config from NVS. Missing keys fall back to placeholder defaults.
     pub fn load(nvs: &EspNvs<NvsDefault>) -> Self {
-        let wifi_ssid = nvs_get_str(nvs, "wifi_ssid")
-            .unwrap_or_else(|| compile_default("KUROKKU_WIFI_SSID", ""));
-
-        let wifi_password = nvs_get_str(nvs, "wifi_pass")
-            .unwrap_or_else(|| compile_default("KUROKKU_WIFI_PASSWORD", ""));
-
-        let server_url = nvs_get_str(nvs, "server_url")
-            .unwrap_or_else(|| compile_default("KUROKKU_SERVER_URL", "http://192.168.1.100:8080"));
-
-        let device_id = nvs_get_str(nvs, "device_id")
-            .unwrap_or_else(|| compile_default("KUROKKU_DEVICE_ID", "esp32-001"));
-
+        let wifi_ssid = nvs_get_str(nvs, "wifi_ssid").unwrap_or_default();
+        let wifi_password = nvs_get_str(nvs, "wifi_pass").unwrap_or_default();
+        let server_url = nvs_get_str(nvs, "server_url").unwrap_or_default();
+        let device_id =
+            nvs_get_str(nvs, "device_id").unwrap_or_else(|| "unprovisioned".to_string());
         let format_24h = nvs_get_u8(nvs, "format_24h").map(|v| v != 0).unwrap_or(true);
         let default_brightness = nvs_get_u8(nvs, "brightness").unwrap_or(4);
         let poll_interval_ms = nvs_get_u32(nvs, "poll_ms").map(|v| v as u64).unwrap_or(5000);
-
-        let tz = nvs_get_str(nvs, "tz")
-            .unwrap_or_else(|| compile_default("KUROKKU_TZ", "CST6CDT,M3.2.0,M11.1.0"));
+        let tz = nvs_get_str(nvs, "tz").unwrap_or_else(|| "UTC0".to_string());
+        let syslog_host = nvs_get_str(nvs, "syslog_host");
 
         let cfg = Self {
             wifi_ssid,
@@ -49,16 +48,18 @@ impl AppConfig {
             default_brightness,
             poll_interval_ms,
             tz,
+            syslog_host,
         };
 
         log::info!(
-            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}",
+            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}, syslog={:?}",
             cfg.server_url,
             cfg.device_id,
             cfg.format_24h,
             cfg.default_brightness,
             cfg.poll_interval_ms,
             cfg.tz,
+            cfg.syslog_host,
         );
 
         cfg
@@ -74,6 +75,12 @@ impl AppConfig {
         nvs_set_u8(nvs, "brightness", self.default_brightness)?;
         nvs_set_u32(nvs, "poll_ms", self.poll_interval_ms as u32)?;
         nvs_set_str(nvs, "tz", &self.tz)?;
+        match &self.syslog_host {
+            Some(h) => nvs_set_str(nvs, "syslog_host", h)?,
+            None => {
+                let _ = nvs.remove("syslog_host");
+            }
+        }
         log::info!("Config saved to NVS");
         Ok(())
     }
@@ -95,7 +102,6 @@ pub fn open_nvs(
 // --- NVS helpers ---
 
 fn nvs_get_str(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<String> {
-    // First get the length
     let len = nvs.str_len(key).ok().flatten()?;
     if len == 0 {
         return None;
@@ -113,8 +119,7 @@ fn nvs_get_u8(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<u8> {
 }
 
 fn nvs_get_u32(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<u32> {
-    // NVS doesn't have u32 directly in all esp-idf-svc versions;
-    // store as i32 and cast
+    // esp-idf-svc's NVS wrapper doesn't expose u32; store as i32 and cast.
     nvs.get_i32(key).ok().flatten().map(|v| v as u32)
 }
 
@@ -131,22 +136,4 @@ fn nvs_set_u8(nvs: &mut EspNvs<NvsDefault>, key: &str, value: u8) -> Result<()> 
 fn nvs_set_u32(nvs: &mut EspNvs<NvsDefault>, key: &str, value: u32) -> Result<()> {
     nvs.set_i32(key, value as i32)
         .map_err(|e| anyhow::anyhow!("NVS set_i32({}) failed: {}", key, e))
-}
-
-/// Get a compile-time env var, falling back to a default.
-fn compile_default(env_key: &str, default: &str) -> String {
-    option_env_dynamic(env_key).unwrap_or_else(|| default.to_string())
-}
-
-/// Workaround: option_env! is a macro that needs a literal.
-/// We use known keys and match.
-fn option_env_dynamic(key: &str) -> Option<String> {
-    match key {
-        "KUROKKU_WIFI_SSID" => option_env!("KUROKKU_WIFI_SSID").map(|s| s.to_string()),
-        "KUROKKU_WIFI_PASSWORD" => option_env!("KUROKKU_WIFI_PASSWORD").map(|s| s.to_string()),
-        "KUROKKU_SERVER_URL" => option_env!("KUROKKU_SERVER_URL").map(|s| s.to_string()),
-        "KUROKKU_DEVICE_ID" => option_env!("KUROKKU_DEVICE_ID").map(|s| s.to_string()),
-        "KUROKKU_TZ" => option_env!("KUROKKU_TZ").map(|s| s.to_string()),
-        _ => None,
-    }
 }
