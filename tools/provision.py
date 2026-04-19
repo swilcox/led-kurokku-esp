@@ -137,12 +137,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    gen = shutil.which("nvs_partition_gen.py") or shutil.which("nvs_partition_gen")
-    if gen is None:
-        sys.exit(
-            "error: nvs_partition_gen not on PATH. Install with:\n"
-            "  pip install -r tools/requirements.txt"
-        )
+    gen = [sys.executable, "-m", "esp_idf_nvs_partition_gen"]
     if not args.dry_run and not shutil.which("espflash"):
         sys.exit("error: espflash not on PATH")
 
@@ -166,7 +161,7 @@ def main() -> int:
         bin_path = td / "nvs.bin"
         csv_path.write_text(csv_body)
 
-        run([gen, "generate", str(csv_path), str(bin_path), str(size)])
+        run([*gen, "generate", str(csv_path), str(bin_path), str(size)])
 
         if args.dry_run:
             kept = REPO_ROOT / "tools" / f"{args.device}.nvs.bin"
