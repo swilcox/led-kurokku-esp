@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0). Leave empty for a dry-run build without a release."
+        required: false
+        default: ""
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [max7219, tm1637]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git wget flex bison gperf python3 python3-pip python3-venv \
+            cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+      - name: Install Rust nightly with rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: riscv32imc-unknown-none-elf
+
+      - name: Cache cargo registry and git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Cache cargo bin (ldproxy, espflash)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ runner.os }}-ldproxy-espflash-v1
+
+      - name: Cache ESP-IDF tooling
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ~/.rustup
+          key: espidf-${{ runner.os }}-v5.2-${{ hashFiles('sdkconfig.defaults', 'rust-toolchain.toml') }}
+          restore-keys: espidf-${{ runner.os }}-v5.2-
+
+      - name: Cache build target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: target-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('Cargo.lock', 'sdkconfig.defaults') }}
+          restore-keys: target-${{ runner.os }}-${{ matrix.variant }}-
+
+      - name: Install ldproxy and espflash
+        run: |
+          command -v ldproxy >/dev/null || cargo install ldproxy --locked
+          command -v espflash >/dev/null || cargo install espflash --locked
+
+      - name: Verify clean working tree
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working tree is dirty — build.rs would stamp -dirty into the version."
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Build release (${{ matrix.variant }})
+        run: cargo build --release --features ${{ matrix.variant }} --no-default-features
+
+      - name: Package firmware image
+        id: package
+        run: |
+          set -euo pipefail
+          ELF=target/riscv32imc-esp-espidf/release/led-kurokku-esp
+          REF="${{ github.ref_name }}"
+          TAG_INPUT="${{ github.event.inputs.tag }}"
+          VERSION="${TAG_INPUT:-$REF}"
+          # Strip leading "v" for filename neatness; fall back to short sha on manual runs.
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          elif [[ "$VERSION" == "main" || -z "$VERSION" ]]; then
+            VERSION="$(git rev-parse --short HEAD)"
+          fi
+          OUT="kurokku-${{ matrix.variant }}-${VERSION}.bin"
+          espflash save-image --chip esp32c3 "$ELF" "$OUT"
+          sha256sum "$OUT" > "${OUT}.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.variant }}
+          path: |
+            ${{ steps.package.outputs.out }}
+            ${{ steps.package.outputs.out }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.bin
+            artifacts/*.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
