@@ -81,7 +81,15 @@ jobs:
           fi
 
       - name: Build release (${{ matrix.variant }})
-        run: cargo build --release --features ${{ matrix.variant }} --no-default-features
+        run: |
+          _sync() {
+            for dir in target/riscv32imc-esp-espidf/release/build/esp-idf-sys-*/out; do
+              cp -f partitions.csv "$dir/"
+            done
+          }
+          _sync
+          cargo build --release --features ${{ matrix.variant }} --no-default-features \
+            || { _sync && cargo build --release --features ${{ matrix.variant }} --no-default-features; }
 
       - name: Package firmware image
         id: package
