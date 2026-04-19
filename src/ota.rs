@@ -12,6 +12,7 @@ pub fn perform_ota(url: &str) -> Result<()> {
     // Open HTTP connection to firmware URL
     let mut connection = EspHttpConnection::new(&HttpConfig {
         timeout: Some(Duration::from_secs(60)),
+        crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         ..Default::default()
     })
     .map_err(|e| anyhow::anyhow!("OTA HTTP connection failed: {}", e))?;
