@@ -66,7 +66,7 @@ The provisioning script reads the YAML, generates an NVS partition image with `n
 - **`Justfile`** — build recipes; run `just` to list available commands
 - **`rust-toolchain.toml`** — pins nightly channel, includes `rust-src` component
 - **`.cargo/config.toml`** — sets target to `riscv32imc-esp-espidf`, configures `ldproxy` linker, `build-std`, and `ESP_IDF_SDKCONFIG_DEFAULTS`
-- **`sdkconfig.defaults`** — ESP-IDF Kconfig overrides: 8KB main task stack, 1000Hz FreeRTOS tick (1ms sleep granularity), 4MB flash, two-OTA partition table, full TLS certificate bundle for HTTPS OTA
+- **`sdkconfig.defaults`** — ESP-IDF Kconfig overrides: 8KB main task stack, 1000Hz FreeRTOS tick (1ms sleep granularity), 4MB flash, custom partition table (`partitions.csv`), full TLS certificate bundle for HTTPS OTA
 - **`build.rs`** — exports `KUROKKU_GIT_HASH` (short hash + `-dirty` suffix if tree is modified) so firmware can report its version to the server
 
 ### Hardware Wiring (MAX7219)

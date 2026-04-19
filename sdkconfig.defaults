@@ -8,8 +8,9 @@ CONFIG_FREERTOS_HZ=1000
 # 4MB flash (standard for most ESP32-C3 modules)
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# Use ESP-IDF's built-in two-OTA-slot partition table
-CONFIG_PARTITION_TABLE_TWO_OTA=y
+# Custom partition table with 1.875MB OTA slots (firmware exceeds the built-in 1MB slots)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Enable HTTPS for OTA downloads
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

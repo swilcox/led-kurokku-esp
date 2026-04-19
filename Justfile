@@ -5,9 +5,20 @@ default:
 build:
     cargo build
 
-# Build release firmware
+# Build release firmware.
+# On the first build after adding a custom partition table, cmake creates the
+# out/ dir during its configure step but then fails to find partitions.csv
+# during the build step. The retry copies it there and succeeds.
 build-release:
-    cargo build --release
+    #!/usr/bin/env bash
+    shopt -s nullglob
+    _sync() {
+        for dir in target/riscv32imc-esp-espidf/release/build/esp-idf-sys-*/out; do
+            cp -f partitions.csv "$dir/"
+        done
+    }
+    _sync
+    cargo build --release || { _sync && cargo build --release; }
 
 # Build debug for TM1637 7-segment display
 build-tm1637:
@@ -19,11 +30,21 @@ build-tm1637-release:
 
 # Flash release firmware and open serial monitor
 flash:
-    espflash flash target/riscv32imc-esp-espidf/release/led-kurokku-esp --monitor
+    espflash flash \
+        --bootloader target/riscv32imc-esp-espidf/release/bootloader.bin \
+        --partition-table partitions.csv \
+        --erase-data-parts ota \
+        target/riscv32imc-esp-espidf/release/led-kurokku-esp \
+        --monitor
 
 # Flash debug firmware and open serial monitor
 flash-debug:
-    espflash flash target/riscv32imc-esp-espidf/debug/led-kurokku-esp --monitor
+    espflash flash \
+        --bootloader target/riscv32imc-esp-espidf/debug/bootloader.bin \
+        --partition-table partitions.csv \
+        --erase-data-parts ota \
+        target/riscv32imc-esp-espidf/debug/led-kurokku-esp \
+        --monitor
 
 # Build release and flash in one step
 deploy: build-release flash
