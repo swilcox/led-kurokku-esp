@@ -119,8 +119,13 @@ fn run(
     // Show startup banner. Widgets that don't yet support the active display
     // type silently return Err — that's fine here; we ignore it.
     {
-        let cancel = CancelToken::with_timeout(Duration::from_secs(2));
-        let mut status = widget::status::Status::new("KUROKKU", Duration::from_secs(2));
+        let banner = if matches!(any_disp, display::AnyDisplay::Pixel(_)) {
+            "LED クロック"
+        } else {
+            "KUROKKU"
+        };
+        let cancel = CancelToken::with_timeout(Duration::from_secs(3));
+        let mut status = widget::status::Status::new(banner, Duration::from_secs(3));
         let _ = status.run(&mut any_disp, &cancel);
     }
 

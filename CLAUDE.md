@@ -209,7 +209,7 @@ pub trait InstructionSource: Send {
 - OTA triggered by server instruction — engine shows "OTA..." then downloads/reboots
 - `EspError` doesn't impl `std::error::Error` — use `.map_err(|e| anyhow::anyhow!(...))` for `?` operator
 - ESP32-C3 SPI pins default: GPIO6 (SCLK), GPIO7 (MOSI), GPIO10 (CS) — adjust to match wiring
-- Startup sequence: display "KUROKKU" → WiFi → show IP → NTP → engine
+- Startup sequence: display "LED クロック" (pixel) / "KUROKKU" (7-segment) → WiFi → show IP → NTP → engine
 
 ## Dependencies
 
