@@ -147,6 +147,10 @@ impl Engine {
                             let anim_type = match animation.as_str() {
                                 "pong" => AnimationType::Pong,
                                 "matrix" | "matrix_rain" => AnimationType::MatrixRain,
+                                "snake" => AnimationType::Snake,
+                                "curtain" => AnimationType::Curtain,
+                                "sine" | "sine_wave" | "sinewave" => AnimationType::SineWave,
+                                "random" => AnimationType::Random,
                                 _ => AnimationType::Static,
                             };
                             let dur = if duration_secs == 0 {

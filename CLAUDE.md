@@ -170,7 +170,7 @@ All top-level fields are optional. `brightness` (0-15) overrides display brightn
 ```json
 { "type": "animation", "animation": "pong", "duration_secs": 30 }
 ```
-`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock. On 7-segment displays, all three animations render segment-appropriate variants.
+`animation` values: `static` (TV noise), `pong` (bouncing ball with AI paddles), `matrix` or `matrix_rain` (falling columns), `snake` (AI-driven snake chasing food on pixel; segment runs a 3-segment trail around each digit's outer perimeter — a,b,c,d,e,f,a moving right / a,f,e,d,c,b,a moving left — bouncing off the first/last digit, which drops the closing 'a'), `curtain` (pixel: fill one side → unfill same side; segment: fill digits left-to-right in 3 stages each — `e,f` → `a,d,e,f,g` → all seven — with completed digits staying lit, then unfill left-to-right peeling segments in the same order they were laid down — `a,b,c,d,g` → `b,c` → off — while digits to the right remain fully lit), `sine` / `sine_wave` / `sinewave` (pixel: scrolling sine curve; segment: one extra segment accrues across all digits per step in a,b,c,d,e,f,g order, then unrolls in the same order), `random` (pick one variant at widget start from the other six). Unknown values default to `static`. `duration_secs` defaults to `30`; use `0` for infinite (runs until next instruction). After duration, reverts to clock.
 
 **raw_pixel** — direct framebuffer control (32 bytes, one per column):
 ```json
