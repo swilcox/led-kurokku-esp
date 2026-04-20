@@ -139,7 +139,7 @@ GND      ───────  GND   (ground)
 
 Firmware binaries are **generic** — no WiFi credentials, server URL, or device ID are baked in. All per-device configuration lives in NVS (Non-Volatile Storage) and is provisioned separately via a small Python script. This means a single signed OTA image can be distributed safely across every device in your fleet.
 
-On an un-provisioned device, the firmware boots, shows `KUROKKU`, then displays `NO CFG` because no WiFi credentials are present.
+On an un-provisioned device, the firmware boots, shows `LED クロック` (pixel) or `KUROKKU` (7-segment), then displays `NO CFG` because no WiFi credentials are present.
 
 ### Create a Device Config File
 
@@ -267,7 +267,7 @@ The first build downloads and compiles the ESP-IDF SDK, which takes a while. You
 
 After flashing and provisioning, the display will show:
 
-1. **"KUROKKU"** — firmware is starting
+1. **"LED クロック"** (pixel) or **"KUROKKU"** (7-segment) — firmware is starting
 2. **Connecting to WiFi** — may take a few seconds
 3. **IP address** — scrolls across the display once connected
 4. **Clock** — default display when no server instructions are active
