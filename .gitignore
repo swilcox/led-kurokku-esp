@@ -4,3 +4,5 @@
 /sdkconfig.old
 .env
 .claude/
+.DS_Store
+tools/*.nvs.bin
