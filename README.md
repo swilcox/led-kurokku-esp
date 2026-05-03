@@ -6,6 +6,8 @@
 
 Rust firmware for the [ESP32-C3](https://www.espressif.com/en/products/socs/esp32-c3) (RISC-V, built on `esp-idf-hal` / `esp-idf-svc`) that drives LED displays, fetching what to show from a server via HTTP polling. Think of it as a tiny networked sign you can control remotely — show the time, scroll messages, play animations, or push raw pixel data.
 
+**Companion server:** [kurokku-esp-server](https://github.com/swilcox/kurokku-esp-server) — the instruction server this firmware polls. You'll want to run that (or implement the [server API](docs/server-api.md) yourself) to drive the device.
+
 Sister project to [led-kurokku-go](https://github.com/swilcox/led-kurokku-go) (Raspberry Pi version).
 
 ![MAX7219 demo](docs/media/demo.gif)
