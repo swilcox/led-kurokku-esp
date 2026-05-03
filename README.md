@@ -1,14 +1,20 @@
 # LED Kurokku ESP
 
-Rust firmware for ESP32-C3 that drives LED displays, fetching what to show from a server via HTTP polling. Think of it as a tiny networked sign you can control remotely — show the time, scroll messages, play animations, or push raw pixel data.
+[![Rust](https://img.shields.io/badge/rust-nightly-orange.svg?logo=rust)](https://www.rust-lang.org/)
+[![Platform: ESP32-C3](https://img.shields.io/badge/platform-ESP32--C3-blue.svg?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-c3)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+
+Rust firmware for the [ESP32-C3](https://www.espressif.com/en/products/socs/esp32-c3) (RISC-V, built on `esp-idf-hal` / `esp-idf-svc`) that drives LED displays, fetching what to show from a server via HTTP polling. Think of it as a tiny networked sign you can control remotely — show the time, scroll messages, play animations, or push raw pixel data.
 
 Sister project to [led-kurokku-go](https://github.com/swilcox/led-kurokku-go) (Raspberry Pi version).
+
+![MAX7219 demo](docs/media/demo.gif)
 
 ## Supported Displays
 
 | Display | Interface | Status |
 |---------|-----------|--------|
-| **MAX7219** — 32x8 LED matrix (4 daisy-chained 8x8 modules) | SPI | Implemented |
+| **MAX7219** — 32x8 LED matrix (4 daisy-chained 8x8 modules) | SPI | Implemented (demo above) |
 | **TM1637** — 4-digit 7-segment | GPIO bit-bang | Implemented |
 
 One display per device, selected at compile time via cargo feature flags
