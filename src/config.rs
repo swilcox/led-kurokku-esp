@@ -99,6 +99,26 @@ pub fn open_nvs(
         .map_err(|e| anyhow::anyhow!("NVS open failed: {}", e))
 }
 
+/// Persist a single string key to NVS, or remove it when `value` is None.
+///
+/// Used by remote config updates (the `config` field in a server response) so
+/// settings like the syslog target can change without re-provisioning a device
+/// over serial. ESP-IDF NVS skips the flash write when the stored value already
+/// matches, so re-applying the same value is cheap.
+pub fn persist_str_opt(
+    nvs: &mut EspNvs<NvsDefault>,
+    key: &str,
+    value: Option<&str>,
+) -> Result<()> {
+    match value {
+        Some(v) => nvs_set_str(nvs, key, v),
+        None => {
+            let _ = nvs.remove(key);
+            Ok(())
+        }
+    }
+}
+
 // --- NVS helpers ---
 
 fn nvs_get_str(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<String> {

@@ -116,6 +116,10 @@ fn run(
 ) -> ! {
     use widget::{CancelToken, Widget};
 
+    // Keep a partition handle for the engine so remote config updates can be
+    // persisted. wifi::connect consumes the original below.
+    let engine_nvs = nvs_partition.clone();
+
     // Show startup banner. Widgets that don't yet support the active display
     // type silently return Err — that's fine here; we ignore it.
     {
@@ -194,7 +198,7 @@ fn run(
         ),
     );
 
-    let eng = engine::Engine::new(cfg);
+    let eng = engine::Engine::new(cfg, engine_nvs);
     log::info!("Starting engine");
     eng.run(any_disp, source, wifi_handle);
 }
