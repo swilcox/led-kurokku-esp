@@ -52,12 +52,30 @@ fn default_scroll_speed() -> u64 { 50 }
 fn default_repeats() -> i32 { 1 }
 fn default_animation_duration() -> u64 { 30 }
 
+/// Remote configuration update delivered alongside an instruction.
+///
+/// Lets the server change persisted NVS settings without re-provisioning a
+/// device over serial. Fields omitted from the JSON are left unchanged; an
+/// empty `syslog_host` string disables syslog. Updates are deduplicated by
+/// the device, so the server can keep returning the same `config` on every
+/// poll without churning NVS flash.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct ConfigUpdate {
+    /// UDP syslog target as "host:port". Empty string disables syslog.
+    #[serde(default)]
+    pub syslog_host: Option<String>,
+    /// POSIX TZ string, e.g. "CST6CDT,M3.2.0,M11.1.0".
+    #[serde(default)]
+    pub tz: Option<String>,
+}
+
 /// Full server response.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ServerResponse {
     pub instruction: Option<WidgetInstruction>,
     pub brightness: Option<u8>,
     pub poll_interval_ms: Option<u64>,
+    pub config: Option<ConfigUpdate>,
 }
 
 /// Trait for fetching instructions from a server.

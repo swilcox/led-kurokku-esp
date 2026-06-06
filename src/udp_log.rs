@@ -1,5 +1,5 @@
 use std::net::UdpSocket;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use esp_idf_svc::log::EspLogger;
 
@@ -9,7 +9,7 @@ struct UdpTarget {
     hostname: String,
 }
 
-static UDP_TARGET: OnceLock<UdpTarget> = OnceLock::new();
+static UDP_TARGET: RwLock<Option<UdpTarget>> = RwLock::new(None);
 
 static LOGGER: CompositeLogger = CompositeLogger {
     esp: EspLogger::new(),
@@ -27,18 +27,20 @@ impl log::Log for CompositeLogger {
     fn log(&self, record: &log::Record) {
         self.esp.log(record);
 
-        if let Some(udp) = UDP_TARGET.get() {
-            let pri = syslog_priority(record.level());
-            let module = record.module_path().unwrap_or("-");
-            // RFC5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
-            let msg = format!(
-                "<{}>1 - {} {} - - - {}",
-                pri,
-                udp.hostname,
-                module,
-                record.args(),
-            );
-            let _ = udp.socket.send_to(msg.as_bytes(), &udp.target);
+        if let Ok(guard) = UDP_TARGET.read() {
+            if let Some(udp) = guard.as_ref() {
+                let pri = syslog_priority(record.level());
+                let module = record.module_path().unwrap_or("-");
+                // RFC5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
+                let msg = format!(
+                    "<{}>1 - {} {} - - - {}",
+                    pri,
+                    udp.hostname,
+                    module,
+                    record.args(),
+                );
+                let _ = udp.socket.send_to(msg.as_bytes(), &udp.target);
+            }
         }
     }
 
@@ -77,10 +79,29 @@ pub fn enable_udp(host: &str, device_id: &str) {
         log::warn!("UDP socket set_nonblocking failed: {}", e);
     }
 
-    let _ = UDP_TARGET.set(UdpTarget {
+    let new_target = UdpTarget {
         socket,
         target: host.to_string(),
         hostname: device_id.to_string(),
-    });
+    };
+    // Replace any existing target so the syslog destination can be changed at
+    // runtime via a remote `config` update. Drop the write guard before
+    // logging — `log()` takes a read lock and would otherwise deadlock.
+    match UDP_TARGET.write() {
+        Ok(mut guard) => *guard = Some(new_target),
+        Err(_) => {
+            log::warn!("UDP target lock poisoned; syslog not updated");
+            return;
+        }
+    }
     log::info!("UDP syslog enabled → {}", host);
+}
+
+/// Disable UDP syslog, dropping the current target. Subsequent logs go to
+/// serial only until `enable_udp` is called again.
+pub fn disable_udp() {
+    if let Ok(mut guard) = UDP_TARGET.write() {
+        *guard = None;
+    }
+    log::info!("UDP syslog disabled");
 }

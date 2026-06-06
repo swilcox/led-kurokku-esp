@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 use log;
 
 use crate::config::AppConfig;
 use crate::display::AnyDisplay;
-use crate::network::{InstructionSource, WidgetInstruction};
+use crate::network::{ConfigUpdate, InstructionSource, WidgetInstruction};
 use crate::widget::clock::Clock;
 use crate::widget::status::Status;
 use crate::widget::{CancelToken, Widget};
@@ -21,6 +22,10 @@ struct SharedState {
     pending_brightness: Option<u8>,
     /// Set to true when the network thread detects an OTA request.
     ota_url: Option<String>,
+    /// Remote config update from the server (syslog target, timezone, …).
+    /// Applied by the display thread as a side effect without disturbing the
+    /// active widget. Deduplicated by the network thread.
+    pending_config: Option<ConfigUpdate>,
     /// Cancel token for the currently running widget. The network thread
     /// signals this when it installs a new instruction so the widget wakes
     /// up and the display loop can pick the instruction up. The display
@@ -31,11 +36,13 @@ struct SharedState {
 /// Engine manages the two-thread display loop.
 pub struct Engine {
     config: AppConfig,
+    /// NVS partition handle so remote config updates can be persisted.
+    nvs_partition: EspDefaultNvsPartition,
 }
 
 impl Engine {
-    pub fn new(config: AppConfig) -> Self {
-        Self { config }
+    pub fn new(config: AppConfig, nvs_partition: EspDefaultNvsPartition) -> Self {
+        Self { config, nvs_partition }
     }
 
     /// Run the engine. This blocks forever.
@@ -56,6 +63,7 @@ impl Engine {
             pending_instruction: None,
             pending_brightness: None,
             ota_url: None,
+            pending_config: None,
             current_cancel: CancelToken::new(),
         }));
 
@@ -92,6 +100,15 @@ impl Engine {
                         AnyDisplay::Pixel(ref mut d) => d.set_brightness(brightness),
                         AnyDisplay::Segment(ref mut d) => d.set_brightness(brightness),
                     }
+                }
+
+                if let Some(update) = state.pending_config.take() {
+                    // Apply persisted-config changes without disturbing the
+                    // active widget. Release the lock first — NVS writes and
+                    // logging can be slow.
+                    drop(state);
+                    self.apply_config_update(&update);
+                    continue;
                 }
 
                 if let Some(url) = state.ota_url.take() {
@@ -200,6 +217,46 @@ impl Engine {
             }
         }
     }
+
+    /// Apply a remote config update: persist the changed keys to NVS and apply
+    /// them live where possible (syslog target, timezone) so no reboot is
+    /// needed. Called from the display thread.
+    fn apply_config_update(&self, update: &ConfigUpdate) {
+        let mut nvs = match crate::config::open_nvs(self.nvs_partition.clone()) {
+            Ok(n) => n,
+            Err(e) => {
+                log::error!("Config update: NVS open failed: {}", e);
+                return;
+            }
+        };
+
+        if let Some(host) = update.syslog_host.as_deref() {
+            if host.is_empty() {
+                if let Err(e) = crate::config::persist_str_opt(&mut nvs, "syslog_host", None) {
+                    log::error!("Config update: persist syslog_host failed: {}", e);
+                }
+                crate::udp_log::disable_udp();
+            } else {
+                if let Err(e) =
+                    crate::config::persist_str_opt(&mut nvs, "syslog_host", Some(host))
+                {
+                    log::error!("Config update: persist syslog_host failed: {}", e);
+                }
+                crate::udp_log::enable_udp(host, &self.config.device_id);
+            }
+        }
+
+        if let Some(tz) = update.tz.as_deref() {
+            if !tz.is_empty() {
+                if let Err(e) = crate::config::persist_str_opt(&mut nvs, "tz", Some(tz)) {
+                    log::error!("Config update: persist tz failed: {}", e);
+                }
+                if let Err(e) = crate::wifi::set_timezone(tz) {
+                    log::warn!("Config update: apply tz failed: {}", e);
+                }
+            }
+        }
+    }
 }
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 60;
@@ -214,6 +271,7 @@ fn network_loop(
     // restart the active widget every interval. The server is expected to
     // return the *current* desired state on each poll, not a diff.
     let mut last_served: Option<WidgetInstruction> = None;
+    let mut last_config: Option<ConfigUpdate> = None;
     let mut consecutive_failures: u32 = 0;
 
     loop {
@@ -236,6 +294,16 @@ fn network_loop(
 
                 if let Some(brightness) = resp.brightness {
                     state.pending_brightness = Some(brightness);
+                }
+
+                if let Some(config) = resp.config {
+                    // Dedup so we don't rewrite NVS every poll — the server is
+                    // expected to keep returning the current desired config.
+                    if last_config.as_ref() != Some(&config) {
+                        log::info!("Config update received: {:?}", config);
+                        state.pending_config = Some(config.clone());
+                        last_config = Some(config);
+                    }
                 }
             }
             Ok(None) => {

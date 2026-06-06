@@ -117,7 +117,7 @@ Mirrors `led-kurokku-go`:
 
 - **`config`** — `AppConfig` loaded exclusively from NVS; placeholder defaults for missing keys. `open_nvs()` opens the `kurokku` NVS namespace. Provisioned via `tools/provision.py`.
 - **`display/`** — Trait definitions + drivers. `max7219.rs` (SPI), `tm1637.rs` (bit-banged 2-wire; 5µs bit delay via `Ets::delay_us`).
-- **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion.
+- **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion. A remote `config` field (deduped via `last_config`) is applied by the display thread through `apply_config_update` — it persists changed keys to NVS and applies syslog/timezone live, without swapping the active widget.
 - **`font`** — 5x7 ASCII bitmap font (columns, bit 0 = top row). `render_text()` joins glyphs with 1-column gaps.
 - **`font_7seg`** — character → 7-segment bitmask table (u8). `encode(char)`, `digit(u8)`, `encode_text(&str)`. Table ported from Go `segfont.Seg7` / Python `SEGMENTS`. `encode_text` folds `.` into the previous digit's DP bit (0x80).
 - **`framebuf`** — `Frame = [u8; 32]`, column-major. `blit_text`, `blit_text_centered`, `set_pixel`.
@@ -129,7 +129,7 @@ Mirrors `led-kurokku-go`:
   - `animation` — pixel: `static` (TV noise), `pong` (bouncing ball), `matrix_rain` (falling columns). Segment: `static` (random segments), `pong` (vertical-bar "ball" bouncing L/R across each digit in turn: left verts → right verts → next digit), `matrix_rain` (per-side raindrops per digit, top-vert → bottom-vert → bottom-horizontal, multiple concurrent drops).
   - `raw_render` — dumb renderer: server sends pixel/segment data directly.
   - `status` — shows IP address, errors, startup messages. Pixel scrolls if > 32px; segment scrolls if > display length (250ms cadence).
-- **`udp_log`** — Optional UDP syslog (RFC5424). Composite logger wraps `EspLogger` (serial) + UDP sink. `init()` replaces `EspLogger::initialize_default()`. `enable_udp(host, device_id)` called after WiFi connects if `syslog_host` is configured. Fire-and-forget, non-blocking.
+- **`udp_log`** — Optional UDP syslog (RFC5424). Composite logger wraps `EspLogger` (serial) + UDP sink. `init()` replaces `EspLogger::initialize_default()`. `enable_udp(host, device_id)` called after WiFi connects if `syslog_host` is configured. The target lives in a `RwLock<Option<…>>` so it can be retargeted at runtime via a remote `config` update; `disable_udp()` clears it. Fire-and-forget, non-blocking.
 - **`wifi`** — `connect()` blocks until WiFi + IP. `sync_ntp()` returns SNTP handle for periodic re-sync.
 
 ### Server API Contract
@@ -146,11 +146,19 @@ Response envelope:
 {
   "instruction": { ... },
   "brightness": 8,
-  "poll_interval_ms": 5000
+  "poll_interval_ms": 5000,
+  "config": { "syslog_host": "192.168.1.50:5514", "tz": "CST6CDT,M3.2.0,M11.1.0" }
 }
 ```
 
 All top-level fields are optional. `brightness` (0-15) overrides display brightness. `poll_interval_ms` adjusts the polling interval for subsequent requests.
+
+`config` remotely updates persisted NVS settings without re-provisioning over serial — a side channel applied alongside whatever `instruction` is showing (it does **not** swap the active widget). Supported keys:
+
+- `syslog_host` — UDP syslog target as `host:port`. Empty string `""` disables syslog. Applied live via `udp_log::enable_udp`/`disable_udp`.
+- `tz` — POSIX TZ string. Applied live via `setenv`/`tzset`.
+
+Omitted keys are left unchanged. Both keys are persisted to NVS so they survive reboot. The device deduplicates against the last-applied `config`, so the server can keep returning the same block on every poll without churning NVS flash (a write only happens when the value actually changes, and ESP-IDF NVS itself skips identical writes). This is the only way to change logging/timezone on a deployed device short of serial re-provisioning, since OTA replaces only the firmware image and preserves the NVS partition.
 
 #### Instruction Types
 
