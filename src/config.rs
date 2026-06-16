@@ -23,6 +23,21 @@ pub struct AppConfig {
     pub tz: String,
     /// UDP syslog target as "host:port", e.g. "192.168.1.50:5514". None = disabled.
     pub syslog_host: Option<String>,
+    /// Maximum log level: "off", "error", "warn", "info", "debug", or "trace".
+    pub log_level: String,
+}
+
+/// Parse a log level string into a `LevelFilter`. Unrecognized values (including
+/// the empty string) fall back to `Info`.
+pub fn parse_level(s: &str) -> log::LevelFilter {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "off" => log::LevelFilter::Off,
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    }
 }
 
 impl AppConfig {
@@ -38,6 +53,7 @@ impl AppConfig {
         let poll_interval_ms = nvs_get_u32(nvs, "poll_ms").map(|v| v as u64).unwrap_or(5000);
         let tz = nvs_get_str(nvs, "tz").unwrap_or_else(|| "UTC0".to_string());
         let syslog_host = nvs_get_str(nvs, "syslog_host");
+        let log_level = nvs_get_str(nvs, "log_level").unwrap_or_else(|| "info".to_string());
 
         let cfg = Self {
             wifi_ssid,
@@ -49,10 +65,11 @@ impl AppConfig {
             poll_interval_ms,
             tz,
             syslog_host,
+            log_level,
         };
 
         log::info!(
-            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}, syslog={:?}",
+            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}, syslog={:?}, log_level={}",
             cfg.server_url,
             cfg.device_id,
             cfg.format_24h,
@@ -60,6 +77,7 @@ impl AppConfig {
             cfg.poll_interval_ms,
             cfg.tz,
             cfg.syslog_host,
+            cfg.log_level,
         );
 
         cfg
@@ -75,6 +93,7 @@ impl AppConfig {
         nvs_set_u8(nvs, "brightness", self.default_brightness)?;
         nvs_set_u32(nvs, "poll_ms", self.poll_interval_ms as u32)?;
         nvs_set_str(nvs, "tz", &self.tz)?;
+        nvs_set_str(nvs, "log_level", &self.log_level)?;
         match &self.syslog_host {
             Some(h) => nvs_set_str(nvs, "syslog_host", h)?,
             None => {

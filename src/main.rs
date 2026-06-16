@@ -16,6 +16,8 @@ mod network;
 #[cfg(target_os = "espidf")]
 mod ota;
 #[cfg(target_os = "espidf")]
+mod temp_sensor;
+#[cfg(target_os = "espidf")]
 mod udp_log;
 #[cfg(target_os = "espidf")]
 mod widget;
@@ -53,6 +55,10 @@ fn main() {
     let nvs = config::open_nvs(nvs_partition.clone()).expect("Failed to open NVS");
     let cfg = config::AppConfig::load(&nvs);
     drop(nvs); // release the NVS handle before WiFi needs the partition
+
+    // Apply the configured log level now that NVS is loaded. Until this point
+    // we run at the logger's default level so startup/config logs are visible.
+    log::set_max_level(config::parse_level(&cfg.log_level));
 
     #[cfg(feature = "max7219")]
     {
