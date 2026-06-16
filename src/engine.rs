@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
@@ -139,7 +139,9 @@ impl Engine {
                 }
 
                 if let Some(instruction) = state.pending_instruction.take() {
-                    log::info!("New instruction: {:?}", instruction);
+                    // The network thread already logs the change at info level;
+                    // this is the display-side pickup, so keep it at debug.
+                    log::debug!("New instruction: {:?}", instruction);
 
                     current_widget = match instruction {
                         WidgetInstruction::Clock { format_24h } => {
@@ -195,8 +197,9 @@ impl Engine {
             // Run current widget for one iteration
             match current_widget.run(display, &cancel) {
                 Ok(()) => {
-                    // Widget finished (e.g. message done scrolling) — revert to clock
-                    log::info!("Widget finished, reverting to clock");
+                    // Widget finished (e.g. message done scrolling) — revert to
+                    // clock. Routine, so debug rather than info.
+                    log::debug!("Widget finished, reverting to clock");
                     current_widget = Box::new(Clock::new(current_format_24h));
                     let new_cancel = CancelToken::new();
                     shared.lock().unwrap().current_cancel = new_cancel.clone();
@@ -256,10 +259,26 @@ impl Engine {
                 }
             }
         }
+
+        if let Some(level) = update.log_level.as_deref() {
+            if !level.is_empty() {
+                if let Err(e) = crate::config::persist_str_opt(&mut nvs, "log_level", Some(level)) {
+                    log::error!("Config update: persist log_level failed: {}", e);
+                }
+                let filter = crate::config::parse_level(level);
+                log::set_max_level(filter);
+                log::info!("Log level set: {}", filter);
+            }
+        }
     }
 }
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 60;
+
+/// How often the network thread logs device telemetry (RSSI, die temperature).
+/// Coarse on purpose — this is health signal, not a metrics feed, and it flows
+/// to syslog when enabled.
+const TELEMETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Network thread loop. Polls the instruction source and updates shared state.
 fn network_loop(
@@ -273,6 +292,17 @@ fn network_loop(
     let mut last_served: Option<WidgetInstruction> = None;
     let mut last_config: Option<ConfigUpdate> = None;
     let mut consecutive_failures: u32 = 0;
+
+    // Internal temperature sensor for periodic health telemetry. If it fails to
+    // install we just skip temperature reporting rather than taking down polls.
+    let temp_sensor = match crate::temp_sensor::TempSensor::new() {
+        Ok(s) => Some(s),
+        Err(e) => {
+            log::warn!("Temperature sensor unavailable: {}", e);
+            None
+        }
+    };
+    let mut last_telemetry = Instant::now();
 
     loop {
         match source.next_instruction() {
@@ -339,7 +369,30 @@ fn network_loop(
             }
         }
 
+        // Periodic device health telemetry. Logged (not pushed to the server)
+        // so it lands in syslog when a target is configured.
+        if last_telemetry.elapsed() >= TELEMETRY_INTERVAL {
+            last_telemetry = Instant::now();
+            log_telemetry(&wifi, temp_sensor.as_ref());
+        }
+
         let interval = source.recommended_interval();
         std::thread::sleep(interval);
     }
+}
+
+/// Emit a single telemetry line with WiFi RSSI and CPU die temperature. Either
+/// field is omitted (shown as `?`) when unavailable.
+fn log_telemetry(wifi: &Option<SharedWifi>, temp_sensor: Option<&crate::temp_sensor::TempSensor>) {
+    let rssi = wifi
+        .as_ref()
+        .and_then(|w| w.lock().ok())
+        .and_then(|guard| crate::wifi::get_rssi(&guard));
+    let temp_c = temp_sensor.and_then(|s| s.read_celsius());
+
+    log::info!(
+        "telemetry: rssi={} temp_c={}",
+        rssi.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+        temp_c.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "?".into()),
+    );
 }

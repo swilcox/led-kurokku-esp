@@ -46,6 +46,20 @@ pub fn connect(
     Ok(wifi)
 }
 
+/// Read the current AP signal strength (RSSI) in dBm, or None if the station
+/// isn't associated. Backed by the global `esp_wifi_sta_get_rssi`, so it does
+/// not need the WiFi handle locked — the parameter just documents that a
+/// connection is expected.
+pub fn get_rssi(_wifi: &BlockingWifi<EspWifi<'static>>) -> Option<i32> {
+    let mut rssi: core::ffi::c_int = 0;
+    let err = unsafe { esp_idf_svc::sys::esp_wifi_sta_get_rssi(&mut rssi) };
+    if err == esp_idf_svc::sys::ESP_OK {
+        Some(rssi as i32)
+    } else {
+        None
+    }
+}
+
 /// Get the station IP address as a string, or None if not connected.
 pub fn get_ip(wifi: &BlockingWifi<EspWifi<'static>>) -> Option<String> {
     wifi.wifi()

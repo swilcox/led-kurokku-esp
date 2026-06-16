@@ -42,6 +42,7 @@ All config is loaded from the `kurokku` NVS namespace on boot. Unset keys fall b
 | `format_24h` | u8 (0/1) | `1` | 24-hour clock format |
 | `brightness` | u8 | `4` | Default display brightness 0-15 |
 | `poll_ms` | i32 | `5000` | Server poll interval in ms |
+| `log_level` | string | `info` | Max log level: `off`/`error`/`warn`/`info`/`debug`/`trace` |
 
 ### Provisioning a Device
 
@@ -117,12 +118,13 @@ Mirrors `led-kurokku-go`:
 
 - **`config`** — `AppConfig` loaded exclusively from NVS; placeholder defaults for missing keys. `open_nvs()` opens the `kurokku` NVS namespace. Provisioned via `tools/provision.py`.
 - **`display/`** — Trait definitions + drivers. `max7219.rs` (SPI), `tm1637.rs` (bit-banged 2-wire; 5µs bit delay via `Ets::delay_us`).
-- **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion. A remote `config` field (deduped via `last_config`) is applied by the display thread through `apply_config_update` — it persists changed keys to NVS and applies syslog/timezone live, without swapping the active widget.
+- **`engine`** — Two-thread display loop. Network thread feeds `SharedState`, display thread runs widgets. Cancel token shared between threads: network thread cancels current widget on instruction change, display thread installs fresh token when starting each widget. Network loop deduplicates repeated identical polls via `last_served` tracking. Falls back to clock on error/widget completion. A remote `config` field (deduped via `last_config`) is applied by the display thread through `apply_config_update` — it persists changed keys to NVS and applies syslog/timezone/log-level live, without swapping the active widget. The network thread also emits a periodic `telemetry:` log line (WiFi RSSI + CPU die temperature, every 60s) via `log_telemetry` — health signal that flows to syslog when enabled.
 - **`font`** — 5x7 ASCII bitmap font (columns, bit 0 = top row). `render_text()` joins glyphs with 1-column gaps.
 - **`font_7seg`** — character → 7-segment bitmask table (u8). `encode(char)`, `digit(u8)`, `encode_text(&str)`. Table ported from Go `segfont.Seg7` / Python `SEGMENTS`. `encode_text` folds `.` into the previous digit's DP bit (0x80).
 - **`framebuf`** — `Frame = [u8; 32]`, column-major. `blit_text`, `blit_text_centered`, `set_pixel`.
 - **`network/`** — `InstructionSource` trait (polling now, WebSocket later). `polling.rs` implements HTTP GET polling. `WidgetInstruction` enum for server commands.
 - **`ota`** — `perform_ota(url)` downloads firmware, flashes inactive OTA partition, reboots. Uses ESP-IDF's built-in two-OTA partition table.
+- **`temp_sensor`** — Thin wrapper over ESP-IDF's `temperature_sensor` driver (raw `sys` bindings; not wrapped by `esp-idf-svc`). `TempSensor::new()` installs/enables the on-die sensor; `read_celsius()` reads it. Used for telemetry.
 - **`widget/`** — `Widget` trait (`name`, `run`). `CancelToken` for cooperative cancellation. `sleep_or_cancel` polls at 50ms granularity. Each widget dispatches on `AnyDisplay` to render on pixel or segment backends.
   - `clock` — 24h/12h with AM/PM double-blink pattern. Segment variant renders digits via `font_7seg::digit` with leading blank in 12h mode.
   - `message` — pixel: static centered if ≤32px wide, scrolling otherwise. Segment: static if fits in display length, otherwise window scroll (pad `width` blanks each side, slide 1 char per tick).
@@ -157,8 +159,9 @@ All top-level fields are optional. `brightness` (0-15) overrides display brightn
 
 - `syslog_host` — UDP syslog target as `host:port`. Empty string `""` disables syslog. Applied live via `udp_log::enable_udp`/`disable_udp`.
 - `tz` — POSIX TZ string. Applied live via `setenv`/`tzset`.
+- `log_level` — max log level (`off`/`error`/`warn`/`info`/`debug`/`trace`). Empty string is ignored; unrecognized values fall back to `info`. Applied live via `log::set_max_level`.
 
-Omitted keys are left unchanged. Both keys are persisted to NVS so they survive reboot. The device deduplicates against the last-applied `config`, so the server can keep returning the same block on every poll without churning NVS flash (a write only happens when the value actually changes, and ESP-IDF NVS itself skips identical writes). This is the only way to change logging/timezone on a deployed device short of serial re-provisioning, since OTA replaces only the firmware image and preserves the NVS partition.
+Omitted keys are left unchanged. All keys are persisted to NVS so they survive reboot. The device deduplicates against the last-applied `config`, so the server can keep returning the same block on every poll without churning NVS flash (a write only happens when the value actually changes, and ESP-IDF NVS itself skips identical writes). This is the only way to change logging/timezone/log-level on a deployed device short of serial re-provisioning, since OTA replaces only the firmware image and preserves the NVS partition.
 
 #### Instruction Types
 

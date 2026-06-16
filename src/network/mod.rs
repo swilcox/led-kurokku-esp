@@ -67,6 +67,9 @@ pub struct ConfigUpdate {
     /// POSIX TZ string, e.g. "CST6CDT,M3.2.0,M11.1.0".
     #[serde(default)]
     pub tz: Option<String>,
+    /// Maximum log level: "off", "error", "warn", "info", "debug", or "trace".
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 /// Full server response.
