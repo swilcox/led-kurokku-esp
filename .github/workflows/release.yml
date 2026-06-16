@@ -11,6 +11,11 @@ on:
         required: false
         default: ""
 
+# Least-privilege default for all jobs; the release job opts up to
+# contents: write where it actually needs to publish.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.variant }}
