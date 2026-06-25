@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub syslog_host: Option<String>,
     /// Maximum log level: "off", "error", "warn", "info", "debug", or "trace".
     pub log_level: String,
+    /// NTP server override (host or IP). None = ESP-IDF's pool.ntp.org defaults.
+    pub ntp_server: Option<String>,
 }
 
 /// Parse a log level string into a `LevelFilter`. Unrecognized values (including
@@ -54,6 +56,7 @@ impl AppConfig {
         let tz = nvs_get_str(nvs, "tz").unwrap_or_else(|| "UTC0".to_string());
         let syslog_host = nvs_get_str(nvs, "syslog_host");
         let log_level = nvs_get_str(nvs, "log_level").unwrap_or_else(|| "info".to_string());
+        let ntp_server = nvs_get_str(nvs, "ntp_server");
 
         let cfg = Self {
             wifi_ssid,
@@ -66,10 +69,11 @@ impl AppConfig {
             tz,
             syslog_host,
             log_level,
+            ntp_server,
         };
 
         log::info!(
-            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}, syslog={:?}, log_level={}",
+            "Config loaded: server={}, device={}, 24h={}, brightness={}, poll={}ms, tz={}, syslog={:?}, log_level={}, ntp={:?}",
             cfg.server_url,
             cfg.device_id,
             cfg.format_24h,
@@ -78,6 +82,7 @@ impl AppConfig {
             cfg.tz,
             cfg.syslog_host,
             cfg.log_level,
+            cfg.ntp_server,
         );
 
         cfg
@@ -98,6 +103,12 @@ impl AppConfig {
             Some(h) => nvs_set_str(nvs, "syslog_host", h)?,
             None => {
                 let _ = nvs.remove("syslog_host");
+            }
+        }
+        match &self.ntp_server {
+            Some(s) => nvs_set_str(nvs, "ntp_server", s)?,
+            None => {
+                let _ = nvs.remove("ntp_server");
             }
         }
         log::info!("Config saved to NVS");

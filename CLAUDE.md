@@ -39,6 +39,7 @@ All config is loaded from the `kurokku` NVS namespace on boot. Unset keys fall b
 | `device_id` | string | `unprovisioned` | Device identifier for server API |
 | `tz` | string | `UTC0` | POSIX TZ string for local time |
 | `syslog_host` | string | (unset) | UDP syslog target as `host:port` |
+| `ntp_server` | string | (unset) | NTP server override; unset uses pool.ntp.org defaults |
 | `format_24h` | u8 (0/1) | `1` | 24-hour clock format |
 | `brightness` | u8 | `4` | Default display brightness 0-15 |
 | `poll_ms` | i32 | `5000` | Server poll interval in ms |

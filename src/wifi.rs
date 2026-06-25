@@ -69,20 +69,41 @@ pub fn get_ip(wifi: &BlockingWifi<EspWifi<'static>>) -> Option<String> {
         .map(|info| format!("{}", info.ip))
 }
 
-/// Sync system time from NTP. Blocks until the first sync completes or timeout.
-/// Returns the SNTP handle — caller must keep it alive so periodic re-syncs
-/// continue (default: every hour via ESP-IDF's CONFIG_LWIP_SNTP_UPDATE_DELAY).
-pub fn sync_ntp() -> Result<EspSntp<'static>> {
-    use esp_idf_svc::sntp::EspSntp;
+/// Start SNTP and block until the first sync completes or a 15s timeout.
+///
+/// Returns the SNTP handle, which the caller **must keep alive for the lifetime
+/// of the program**: dropping it calls `sntp_stop()` and kills periodic re-sync
+/// (ESP-IDF re-syncs every hour by default via `CONFIG_LWIP_SNTP_UPDATE_DELAY`).
+///
+/// A timeout is *not* fatal — the returned handle keeps polling in the
+/// background, so a device that boots before its NTP server is reachable will
+/// still sync once the network recovers, instead of staying on a wrong time
+/// until reboot.
+///
+/// `ntp_server`, when set, overrides the primary pool server (NVS `ntp_server`).
+pub fn sync_ntp(ntp_server: Option<&str>) -> Result<EspSntp<'static>> {
+    use esp_idf_svc::sntp::{EspSntp, SntpConf};
 
-    log::info!("Starting NTP sync...");
-    let sntp = EspSntp::new_default()
-        .map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
+    let mut conf = SntpConf::default();
+    match ntp_server.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(server) => {
+            // Override the primary server; any remaining slots keep their
+            // pool.ntp.org defaults as fallback (lwIP tries them in order).
+            conf.servers[0] = server;
+            log::info!("Starting NTP sync (server override: {})...", server);
+        }
+        None => log::info!("Starting NTP sync..."),
+    }
+
+    let sntp =
+        EspSntp::new(&conf).map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
 
     let start = std::time::Instant::now();
     while sntp.get_sync_status() != esp_idf_svc::sntp::SyncStatus::Completed {
         if start.elapsed() > Duration::from_secs(15) {
-            anyhow::bail!("NTP sync timed out after 15s");
+            // Hand the still-running handle back so background re-sync continues.
+            log::warn!("NTP first sync not completed within 15s; continuing in background");
+            return Ok(sntp);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
