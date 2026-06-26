@@ -146,6 +146,12 @@ fn run(
         let _ = status.run(&mut any_disp, &cancel);
     }
 
+    // The SNTP handle must outlive the engine: dropping it calls sntp_stop()
+    // and kills periodic re-sync, which strands the device on whatever time it
+    // had at boot. Held at function scope so it lives as long as eng.run()
+    // (which never returns). See issue #11.
+    let mut _sntp: Option<wifi::EspSntp> = None;
+
     let wifi_handle: Option<engine::SharedWifi> = if cfg.has_wifi_config() {
         match wifi::connect(&cfg.wifi_ssid, &cfg.wifi_password, modem, sysloop, nvs_partition) {
             Ok(w) => {
@@ -161,8 +167,9 @@ fn run(
                     udp_log::enable_udp(host, &cfg.device_id);
                 }
 
-                // Sync NTP — keep handle alive for periodic re-sync
-                let _sntp = match wifi::sync_ntp() {
+                // Sync NTP — handle is stored at function scope so periodic
+                // re-sync keeps running for the life of the engine (#11).
+                _sntp = match wifi::sync_ntp(cfg.ntp_server.as_deref()) {
                     Ok(sntp) => Some(sntp),
                     Err(e) => {
                         log::warn!("NTP sync failed: {}", e);
