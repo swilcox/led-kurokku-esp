@@ -32,8 +32,13 @@ impl log::Log for CompositeLogger {
                 let pri = syslog_priority(record.level());
                 let module = record.module_path().unwrap_or("-");
                 // RFC5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
+                // The MSG carries a leading UTF-8 BOM (U+FEFF -> EF BB BF). Per
+                // RFC5424 §6.4 a UTF-8 MSG MUST start with the BOM; without it,
+                // strict parsers (e.g. Vector's syslog_loose) reject any frame
+                // whose message contains non-ASCII bytes — server-sent text like
+                // "78°F" or kana would otherwise fail to parse downstream.
                 let msg = format!(
-                    "<{}>1 - {} {} - - - {}",
+                    "<{}>1 - {} {} - - - \u{feff}{}",
                     pri,
                     udp.hostname,
                     module,
