@@ -95,9 +95,16 @@ pub fn sync_ntp(ntp_server: Option<&str>) -> Result<EspSntp<'static>> {
         None => log::info!("Starting NTP sync..."),
     }
 
-    let sntp =
-        EspSntp::new(&conf).map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
+    // The callback fires on every completed sync, including the hourly
+    // background re-syncs that ESP-IDF performs on its own. `synced` is the
+    // wall-clock time as a Duration since the epoch.
+    let sntp = EspSntp::new_with_callback(&conf, |synced| {
+        log::info!("NTP time synced (epoch: {}s)", synced.as_secs());
+    })
+    .map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
 
+    // Block until the first sync lands so the engine starts with correct time.
+    // The callback above already logs the sync itself, so don't log again here.
     let start = std::time::Instant::now();
     while sntp.get_sync_status() != esp_idf_svc::sntp::SyncStatus::Completed {
         if start.elapsed() > Duration::from_secs(15) {
@@ -107,7 +114,6 @@ pub fn sync_ntp(ntp_server: Option<&str>) -> Result<EspSntp<'static>> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    log::info!("NTP time synced (periodic re-sync active)");
     Ok(sntp)
 }
 

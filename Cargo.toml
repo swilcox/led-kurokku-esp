@@ -1,6 +1,6 @@
 [package]
 name = "led-kurokku-esp"
-version = "0.4.3"
+version = "0.4.4"
 authors = ["swilcox"]
 edition = "2021"
 resolver = "2"
