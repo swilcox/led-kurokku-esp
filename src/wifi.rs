@@ -4,7 +4,27 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 pub use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use log;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
+
+/// Epoch seconds of the most recent completed NTP sync, published by the SNTP
+/// notification callback. `0` means "nothing new since the last drain".
+///
+/// The callback runs in the lwIP tcpip thread, so it must do **no** IO or
+/// blocking work — a UDP syslog send from that context deadlocks the tcpip
+/// thread (and with it all networking and the display). It therefore only
+/// stores this value; a normal thread drains it via [`take_ntp_sync`] and logs.
+/// (riscv32imc has no 64-bit atomics; `u32` epoch seconds suffice until 2106.)
+static LAST_NTP_SYNC: AtomicU32 = AtomicU32::new(0);
+
+/// Epoch-seconds of an NTP sync that completed since the previous call, or
+/// `None` if none has. Draining the slot ensures each sync is reported once.
+pub fn take_ntp_sync() -> Option<u32> {
+    match LAST_NTP_SYNC.swap(0, Ordering::AcqRel) {
+        0 => None,
+        secs => Some(secs),
+    }
+}
 
 /// Connect to WiFi as a station. Blocks until connected or fails.
 pub fn connect(
@@ -96,15 +116,15 @@ pub fn sync_ntp(ntp_server: Option<&str>) -> Result<EspSntp<'static>> {
     }
 
     // The callback fires on every completed sync, including the hourly
-    // background re-syncs that ESP-IDF performs on its own. `synced` is the
-    // wall-clock time as a Duration since the epoch.
+    // background re-syncs that ESP-IDF performs on its own. It runs in the lwIP
+    // tcpip thread, so it must not log or do any IO here (that deadlocks the
+    // tcpip thread); it only publishes the timestamp for a normal thread to log.
     let sntp = EspSntp::new_with_callback(&conf, |synced| {
-        log::info!("NTP time synced (epoch: {}s)", synced.as_secs());
+        LAST_NTP_SYNC.store(synced.as_secs() as u32, Ordering::Release);
     })
     .map_err(|e| anyhow::anyhow!("SNTP init failed: {}", e))?;
 
     // Block until the first sync lands so the engine starts with correct time.
-    // The callback above already logs the sync itself, so don't log again here.
     let start = std::time::Instant::now();
     while sntp.get_sync_status() != esp_idf_svc::sntp::SyncStatus::Completed {
         if start.elapsed() > Duration::from_secs(15) {

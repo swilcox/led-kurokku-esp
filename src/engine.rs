@@ -369,6 +369,12 @@ fn network_loop(
             }
         }
 
+        // Log any NTP sync (boot or hourly background re-sync) recorded by the
+        // SNTP callback, which can't log from its own (tcpip-thread) context.
+        if let Some(epoch) = crate::wifi::take_ntp_sync() {
+            log::info!("NTP time synced (epoch: {}s)", epoch);
+        }
+
         // Periodic device health telemetry. Logged (not pushed to the server)
         // so it lands in syslog when a target is configured.
         if last_telemetry.elapsed() >= TELEMETRY_INTERVAL {
